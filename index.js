@@ -12,7 +12,7 @@ import config from "./config.js";
 import { Rcon } from "rcon-client";
 
 // =====================
-// 🤖 CLIENT
+// 🤖 BOT CLIENT
 // =====================
 const client = new Client({
   intents: [
@@ -27,6 +27,7 @@ const client = new Client({
 // =====================
 const pendingLinks = new Map();
 const messageCooldown = new Map();
+
 let rcon = null;
 let serverOnline = false;
 
@@ -51,23 +52,20 @@ async function connectRcon() {
 }
 
 connectRcon();
-
-// retry connection every 10s
 setInterval(connectRcon, 10000);
 
 // =====================
-// 🛡️ SAFE SEND FUNCTION
+// 🛡️ SAFE SEND (QUEUE SYSTEM)
 // =====================
 async function safeSend(cmd, userId = null) {
   try {
-    if (!rcon) throw new Error("RCON offline");
+    if (!rcon) throw new Error("offline");
 
     await rcon.send(cmd);
     return true;
 
   } catch {
 
-    // 💾 queue system
     if (userId) {
       const user = db.prepare("SELECT reward_queue FROM users WHERE discord_id = ?")
         .get(userId);
@@ -85,7 +83,7 @@ async function safeSend(cmd, userId = null) {
 }
 
 // =====================
-// 🌙 WEEKEND CHECK
+// 🌙 WEEKEND LUCK
 // =====================
 function isWeekend() {
   const now = new Date();
@@ -93,44 +91,71 @@ function isWeekend() {
   return sg.getDay() === 0 || sg.getDay() === 6;
 }
 
-// =====================
-// ⚡ LUCK
-// =====================
-function getLuck() {
+function luckMultiplier() {
   return isWeekend() ? 2 : 1;
 }
 
 // =====================
-// 🎲 LOOT
+// 🎲 LOOT SYSTEM
 // =====================
 function getReward(pool, mult = 1) {
   const total = pool.reduce((a, b) => a + b.chance * mult, 0);
   let r = Math.random() * total;
 
-  for (const i of pool) {
-    const w = i.chance * mult;
-    if (r < w) return i.cmd;
+  for (const item of pool) {
+    const w = item.chance * mult;
+    if (r < w) return item.cmd;
     r -= w;
   }
 }
 
 // =====================
-// 🔧 SLASH COMMANDS
+// 🔧 SLASH COMMANDS (FIXED)
 // =====================
 const commands = [
-  new SlashCommandBuilder().setName("verify")
-    .addStringOption(o => o.setName("username").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("verify")
+    .setDescription("Link Minecraft account")
+    .addStringOption(opt =>
+      opt.setName("username")
+        .setDescription("Minecraft username")
+        .setRequired(true)
+    ),
 
-  new SlashCommandBuilder().setName("roll"),
-  new SlashCommandBuilder().setName("daily"),
-  new SlashCommandBuilder().setName("stats"),
-  new SlashCommandBuilder().setName("leaderboard"),
+  new SlashCommandBuilder()
+    .setName("roll")
+    .setDescription("Spin reward wheel"),
 
-  new SlashCommandBuilder().setName("givespins")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true))
+  new SlashCommandBuilder()
+    .setName("daily")
+    .setDescription("Claim daily spins"),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("View stats"),
+
+  new SlashCommandBuilder()
+    .setName("leaderboard")
+    .setDescription("Top players"),
+
+  new SlashCommandBuilder()
+    .setName("givespins")
+    .setDescription("Admin: give spins")
+    .addUserOption(opt =>
+      opt.setName("user")
+        .setDescription("User")
+        .setRequired(true)
+    )
+    .addIntegerOption(opt =>
+      opt.setName("amount")
+        .setDescription("Amount")
+        .setRequired(true)
+    )
 ].map(c => c.toJSON());
 
+// =====================
+// 🚀 REGISTER COMMANDS
+// =====================
 const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
 await rest.put(
@@ -146,7 +171,7 @@ client.once("ready", () => {
 });
 
 // =====================
-// 💬 MESSAGE TRACKING (ANTI SPAM)
+// 💬 ANTI SPAM MESSAGE TRACKER
 // =====================
 client.on("messageCreate", (msg) => {
   if (msg.author.bot) return;
@@ -168,9 +193,25 @@ client.on("messageCreate", (msg) => {
 });
 
 // =====================
-// 🎮 INTERACTIONS
+// 🎮 COMMAND HANDLER
 // =====================
 client.on("interactionCreate", async (i) => {
+
+  // =====================
+  // 🔐 VERIFY
+  // =====================
+  if (i.commandName === "verify") {
+    const username = i.options.getString("username");
+    const code = Math.floor(10000 + Math.random() * 90000);
+
+    pendingLinks.set(i.user.id, {
+      mc_username: username,
+      code,
+      expires: Date.now() + 120000
+    });
+
+    return i.reply(`🔐 Run in Minecraft:\n/say VERIFY ${code}`);
+  }
 
   // =====================
   // 🎰 ROLL
@@ -189,14 +230,14 @@ client.on("interactionCreate", async (i) => {
     db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
       .run(i.user.id);
 
-    const mult = getLuck();
+    const mult = luckMultiplier();
 
     const cmd = getReward(config.reward.pool, mult)
       ?.replace("{player}", user.mc_username);
 
     await safeSend(cmd, i.user.id);
 
-    return i.reply(`🎰 Rolled reward`);
+    return i.reply("🎰 Rolled reward!");
   }
 
   // =====================
@@ -228,7 +269,9 @@ client.on("interactionCreate", async (i) => {
 
     streak++;
 
-    const reward = config.daily.baseSpins + streak * config.daily.streakBonus;
+    const reward =
+      config.daily.baseSpins +
+      streak * config.daily.streakBonus;
 
     db.prepare(`
       UPDATE users
@@ -246,7 +289,9 @@ client.on("interactionCreate", async (i) => {
     const u = db.prepare("SELECT * FROM users WHERE discord_id = ?")
       .get(i.user.id);
 
-    return i.reply(`🎰 Spins: ${u?.spins || 0}\n🔥 Streak: ${u?.streak || 0}`);
+    return i.reply(
+      `🎰 Spins: ${u?.spins || 0}\n🔥 Streak: ${u?.streak || 0}`
+    );
   }
 
   // =====================
@@ -273,10 +318,11 @@ client.on("interactionCreate", async (i) => {
     const u = i.options.getUser("user");
     const a = i.options.getInteger("amount");
 
-    db.prepare("UPDATE users SET spins = spins + ? WHERE discord_id = ?")
-      .run(a, u.id);
+    db.prepare(`
+      UPDATE users SET spins = spins + ? WHERE discord_id = ?
+    `).run(a, u.id);
 
-    return i.reply(`🎰 +${a} spins`);
+    return i.reply(`🎰 +${a} spins given`);
   }
 });
 
