@@ -1,6 +1,17 @@
 export default {
   reward: {
     messagesRequired: 20,
+
+    luckyUsers: {
+      brayyzzz: 3
+    },
+
+    devMode: false,
+
+    devUsers: {
+      brayyzzz: 100
+    },
+
     pool: [
       // 🌿 COMMON
       { cmd: "give {player} oak_log 16", chance: 3000 },
@@ -24,5 +35,6 @@ export default {
       { cmd: "give {player} enchanted_golden_apple 1", chance: 2 }
     ]
   },
+
   cooldownSeconds: 30
 };
