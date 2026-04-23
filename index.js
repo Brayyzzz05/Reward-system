@@ -12,46 +12,62 @@ import config from "./config.js";
 import { Rcon } from "rcon-client";
 
 // =====================
+// 🤖 CLIENT
+// =====================
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// =====================
 // 📦 STATE
 // =====================
 const pendingLinks = new Map();
 const messageCooldown = new Map();
+let rcon = null;
 let serverOnline = false;
 
 // =====================
-// 🔌 RCON
+// 🔌 SAFE RCON CONNECT (NO CRASH)
 // =====================
-const rcon = await Rcon.connect({
-  host: process.env.RCON_HOST,
-  port: Number(process.env.RCON_PORT),
-  password: process.env.RCON_PASSWORD
-});
-
-console.log("✅ RCON Connected");
-
-// =====================
-// 🧠 SERVER CHECK
-// =====================
-async function checkServer() {
+async function connectRcon() {
   try {
-    await rcon.send("list");
+    rcon = await Rcon.connect({
+      host: process.env.RCON_HOST,
+      port: Number(process.env.RCON_PORT),
+      password: process.env.RCON_PASSWORD
+    });
+
     serverOnline = true;
-  } catch {
+    console.log("✅ RCON Connected");
+  } catch (err) {
+    rcon = null;
     serverOnline = false;
+    console.log("⚠️ RCON offline — bot still running");
   }
 }
-setInterval(checkServer, 5000);
+
+connectRcon();
+
+// retry connection every 10s
+setInterval(connectRcon, 10000);
 
 // =====================
-// 🛡️ SAFE RCON
+// 🛡️ SAFE SEND FUNCTION
 // =====================
 async function safeSend(cmd, userId = null) {
   try {
-    if (!serverOnline) throw new Error("offline");
+    if (!rcon) throw new Error("RCON offline");
+
     await rcon.send(cmd);
     return true;
+
   } catch {
 
+    // 💾 queue system
     if (userId) {
       const user = db.prepare("SELECT reward_queue FROM users WHERE discord_id = ?")
         .get(userId);
@@ -69,7 +85,7 @@ async function safeSend(cmd, userId = null) {
 }
 
 // =====================
-// 🌙 WEEKEND
+// 🌙 WEEKEND CHECK
 // =====================
 function isWeekend() {
   const now = new Date();
@@ -80,27 +96,12 @@ function isWeekend() {
 // =====================
 // ⚡ LUCK
 // =====================
-function getLuckMultiplier(userId) {
+function getLuck() {
   return isWeekend() ? 2 : 1;
 }
 
 // =====================
-// 🎲 SPECIAL
-// =====================
-function rollSpecial(player, mult) {
-  const r = Math.random();
-
-  if (r < config.special.jackpotChance * mult)
-    return { type: "jackpot" };
-
-  if (r < config.special.elytraChance * mult)
-    return { type: "elytra", cmd: `give ${player} elytra 1` };
-
-  return null;
-}
-
-// =====================
-// 🎰 LOOT
+// 🎲 LOOT
 // =====================
 function getReward(pool, mult = 1) {
   const total = pool.reduce((a, b) => a + b.chance * mult, 0);
@@ -114,44 +115,10 @@ function getReward(pool, mult = 1) {
 }
 
 // =====================
-// 🤖 CLIENT
-// =====================
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
-
-// =====================
-// 💬 MESSAGE TRACKING
-// =====================
-client.on("messageCreate", async (msg) => {
-  if (msg.author.bot) return;
-
-  const id = msg.author.id;
-  const now = Date.now();
-
-  const last = messageCooldown.get(id) || 0;
-  if (now - last < 15000) return;
-
-  messageCooldown.set(id, now);
-
-  db.prepare(`
-    INSERT INTO users (discord_id, messages, spins)
-    VALUES (?, 1, 0)
-    ON CONFLICT(discord_id)
-    DO UPDATE SET messages = messages + 1
-  `).run(id);
-});
-
-// =====================
 // 🔧 SLASH COMMANDS
 // =====================
 const commands = [
   new SlashCommandBuilder().setName("verify")
-    .setDescription("Link MC")
     .addStringOption(o => o.setName("username").setRequired(true)),
 
   new SlashCommandBuilder().setName("roll"),
@@ -174,80 +141,78 @@ await rest.put(
 // =====================
 // 🤖 READY
 // =====================
-client.on("ready", () => {
+client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 // =====================
-// 🎮 COMMANDS
+// 💬 MESSAGE TRACKING (ANTI SPAM)
+// =====================
+client.on("messageCreate", (msg) => {
+  if (msg.author.bot) return;
+
+  const id = msg.author.id;
+  const now = Date.now();
+
+  const last = messageCooldown.get(id) || 0;
+  if (now - last < 15000) return;
+
+  messageCooldown.set(id, now);
+
+  db.prepare(`
+    INSERT INTO users (discord_id, messages, spins)
+    VALUES (?, 1, 0)
+    ON CONFLICT(discord_id)
+    DO UPDATE SET messages = messages + 1
+  `).run(id);
+});
+
+// =====================
+// 🎮 INTERACTIONS
 // =====================
 client.on("interactionCreate", async (i) => {
 
-  // 🔐 VERIFY
-  if (i.commandName === "verify") {
-    const username = i.options.getString("username");
-    const code = Math.floor(10000 + Math.random() * 90000);
-
-    pendingLinks.set(i.user.id, {
-      mc_username: username,
-      code,
-      expires: Date.now() + 120000
-    });
-
-    return i.reply(`🔐 Run in MC:\n/say VERIFY ${code}`);
-  }
-
+  // =====================
   // 🎰 ROLL
+  // =====================
   if (i.commandName === "roll") {
 
     const user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
       .get(i.user.id);
 
-    if (!user?.mc_username) return i.reply("❌ Not linked");
-    if ((user.spins || 0) <= 0) return i.reply("❌ No spins");
+    if (!user?.mc_username)
+      return i.reply("❌ Not linked");
+
+    if ((user.spins || 0) <= 0)
+      return i.reply("❌ No spins");
 
     db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
       .run(i.user.id);
 
-    const mult = getLuckMultiplier(i.user.id);
-    const special = rollSpecial(user.mc_username, mult);
+    const mult = getLuck();
 
-    let result = "COMMON";
+    const cmd = getReward(config.reward.pool, mult)
+      ?.replace("{player}", user.mc_username);
 
-    if (special?.type === "jackpot") {
-      result = "💥 JACKPOT";
-      await safeSend(`give ${user.mc_username} netherite_block 1`, i.user.id);
-      await safeSend(`give ${user.mc_username} beacon 1`, i.user.id);
-    }
+    await safeSend(cmd, i.user.id);
 
-    else if (special?.type === "elytra") {
-      result = "🪽 ELYTRA";
-      await safeSend(special.cmd, i.user.id);
-    }
-
-    else {
-      result = "🎁 LOOT";
-      const cmd = getReward(config.reward.pool, mult)
-        .replace("{player}", user.mc_username);
-
-      await safeSend(cmd, i.user.id);
-    }
-
-    db.prepare("UPDATE users SET spins = spins + 1 WHERE discord_id = ?")
-      .run(i.user.id);
-
-    return i.reply(`🎰 Result: ${result}`);
+    return i.reply(`🎰 Rolled reward`);
   }
 
+  // =====================
   // 🎁 DAILY
+  // =====================
   if (i.commandName === "daily") {
 
     let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
       .get(i.user.id);
 
     if (!user) {
-      db.prepare("INSERT INTO users (discord_id, spins, streak, last_daily) VALUES (?,0,0,0)")
-        .run(i.user.id);
+      db.prepare(`
+        INSERT INTO users (discord_id, spins, streak, last_daily)
+        VALUES (?, 0, 0, 0)
+      `).run(i.user.id);
+
       user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
         .get(i.user.id);
     }
@@ -274,7 +239,9 @@ client.on("interactionCreate", async (i) => {
     return i.reply(`🎁 +${reward} spins | 🔥 ${streak}`);
   }
 
+  // =====================
   // 📊 STATS
+  // =====================
   if (i.commandName === "stats") {
     const u = db.prepare("SELECT * FROM users WHERE discord_id = ?")
       .get(i.user.id);
@@ -282,7 +249,9 @@ client.on("interactionCreate", async (i) => {
     return i.reply(`🎰 Spins: ${u?.spins || 0}\n🔥 Streak: ${u?.streak || 0}`);
   }
 
+  // =====================
   // 🏆 LEADERBOARD
+  // =====================
   if (i.commandName === "leaderboard") {
     const rows = db.prepare(`
       SELECT mc_username, spins FROM users ORDER BY spins DESC LIMIT 10
@@ -293,10 +262,13 @@ client.on("interactionCreate", async (i) => {
     );
   }
 
+  // =====================
   // 🛠️ GIVESPINS
+  // =====================
   if (i.commandName === "givespins") {
+
     if (!i.member.permissions.has("Administrator"))
-      return i.reply("❌ No perm");
+      return i.reply("❌ No permission");
 
     const u = i.options.getUser("user");
     const a = i.options.getInteger("amount");
