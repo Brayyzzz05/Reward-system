@@ -8,6 +8,7 @@ import {
 } from "discord.js";
 
 import db from "./database.js";
+import config from "./config.js";
 import { Rcon } from "rcon-client";
 
 // =====================
@@ -17,7 +18,7 @@ const pendingLinks = new Map();
 const messageCooldown = new Map();
 
 // =====================
-// 🔌 RCON
+// 🔌 RCON SETUP
 // =====================
 const rcon = await Rcon.connect({
   host: process.env.RCON_HOST,
@@ -28,7 +29,7 @@ const rcon = await Rcon.connect({
 console.log("✅ RCON Connected");
 
 // =====================
-// 🌙 WEEKEND BOOST
+// 🌙 WEEKEND CHECK
 // =====================
 function isWeekend() {
   const now = new Date();
@@ -38,27 +39,40 @@ function isWeekend() {
 }
 
 // =====================
-// ⚡ LUCK SYSTEM
+// ⚡ LUCK MULTIPLIER
 // =====================
 function getLuckMultiplier(userId) {
-  const base = 1;
   const weekend = isWeekend() ? 2 : 1;
-  return base * weekend;
+  return weekend;
 }
 
 // =====================
 // 🎲 SPECIAL DROPS
 // =====================
 function rollSpecial(player, multiplier) {
-  let jackpot = 0.000000001 * multiplier;
-  let elytra = 0.00001 * multiplier;
-
   const r = Math.random();
 
-  if (r < jackpot) return { type: "jackpot" };
-  if (r < elytra) return { type: "elytra", cmd: `give ${player} elytra 1` };
+  if (r < config.special.jackpotChance * multiplier)
+    return { type: "jackpot" };
+
+  if (r < config.special.elytraChance * multiplier)
+    return { type: "elytra", cmd: `give ${player} elytra 1` };
 
   return null;
+}
+
+// =====================
+// 🎲 LOOT SYSTEM
+// =====================
+function getRandomReward(pool, multiplier = 1) {
+  const total = pool.reduce((a, b) => a + b.chance * multiplier, 0);
+  let roll = Math.random() * total;
+
+  for (const item of pool) {
+    const weight = item.chance * multiplier;
+    if (roll < weight) return item.cmd;
+    roll -= weight;
+  }
 }
 
 // =====================
@@ -73,18 +87,24 @@ const client = new Client({
 });
 
 // =====================
-// 🔧 REGISTER SLASH COMMANDS
+// 🔧 SLASH COMMANDS
 // =====================
 const commands = [
-  new SlashCommandBuilder().setName("verify").setDescription("Link MC account")
-    .addStringOption(o => o.setName("username").setRequired(true)),
+  new SlashCommandBuilder()
+    .setName("verify")
+    .setDescription("Link Minecraft account")
+    .addStringOption(o =>
+      o.setName("username").setRequired(true)
+    ),
 
   new SlashCommandBuilder().setName("roll").setDescription("Spin reward"),
+  new SlashCommandBuilder().setName("daily").setDescription("Claim daily spins"),
   new SlashCommandBuilder().setName("stats").setDescription("View stats"),
   new SlashCommandBuilder().setName("leaderboard").setDescription("Top players"),
-  new SlashCommandBuilder().setName("daily").setDescription("Claim daily spins"),
 
-  new SlashCommandBuilder().setName("givespins").setDescription("Admin give spins")
+  new SlashCommandBuilder()
+    .setName("givespins")
+    .setDescription("Admin give spins")
     .addUserOption(o => o.setName("user").setRequired(true))
     .addIntegerOption(o => o.setName("amount").setRequired(true))
 ].map(c => c.toJSON());
@@ -104,7 +124,7 @@ client.on("ready", () => {
 });
 
 // =====================
-// 💬 MESSAGE SPAM FILTER (15s RULE)
+// 💬 ANTI-SPAM MESSAGE COUNTER
 // =====================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
@@ -121,11 +141,10 @@ client.on("messageCreate", async (message) => {
     .get(id);
 
   if (!user) {
-    db.prepare("INSERT INTO users (discord_id, messages, spins) VALUES (?, 0, 0)")
-      .run(id);
-
-    user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(id);
+    db.prepare(`
+      INSERT INTO users (discord_id, messages, spins)
+      VALUES (?, 0, 0)
+    `).run(id);
   }
 
   db.prepare(`
@@ -136,7 +155,7 @@ client.on("messageCreate", async (message) => {
 });
 
 // =====================
-// 🎮 SLASH COMMANDS
+// 🎮 INTERACTIONS
 // =====================
 client.on("interactionCreate", async (interaction) => {
 
@@ -154,9 +173,7 @@ client.on("interactionCreate", async (interaction) => {
       expires: Date.now() + 120000
     });
 
-    return interaction.reply(
-      `🔐 Run in Minecraft:\n/say VERIFY ${code}`
-    );
+    return interaction.reply(`🔐 Run in MC:\n/say VERIFY ${code}`);
   }
 
   // =====================
@@ -181,24 +198,26 @@ client.on("interactionCreate", async (interaction) => {
     const multiplier = getLuckMultiplier(interaction.user.id);
     const special = rollSpecial(user.mc_username, multiplier);
 
-    let msg = "COMMON";
+    let result = "COMMON";
 
     try {
-
       if (special?.type === "jackpot") {
-        msg = "💥 JACKPOT";
+        result = "💥 JACKPOT";
         await rcon.send(`give ${user.mc_username} netherite_block 1`);
         await rcon.send(`give ${user.mc_username} beacon 1`);
       }
 
       else if (special?.type === "elytra") {
-        msg = "🪽 ELYTRA";
+        result = "🪽 ELYTRA";
         await rcon.send(special.cmd);
       }
 
       else {
-        msg = "🎁 NORMAL";
-        await rcon.send(`give ${user.mc_username} diamond 1`);
+        result = "🎁 NORMAL";
+        const cmd = getRandomReward(config.reward.pool, multiplier)
+          .replace("{player}", user.mc_username);
+
+        await rcon.send(cmd);
       }
 
       db.prepare(`
@@ -209,7 +228,51 @@ client.on("interactionCreate", async (interaction) => {
       console.error(e);
     }
 
-    return interaction.reply(`🎰 Result: ${msg}`);
+    return interaction.reply(`🎰 Result: ${result}`);
+  }
+
+  // =====================
+  // 🎁 DAILY
+  // =====================
+  if (interaction.commandName === "daily") {
+
+    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+      .get(interaction.user.id);
+
+    if (!user) {
+      db.prepare(`
+        INSERT INTO users (discord_id, spins, streak, last_daily)
+        VALUES (?, 0, 0, 0)
+      `).run(interaction.user.id);
+
+      user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+        .get(interaction.user.id);
+    }
+
+    const now = Date.now();
+    const last = user.last_daily || 0;
+    const ONE_DAY = 86400000;
+
+    if (now - last < ONE_DAY) {
+      return interaction.reply("❌ Already claimed daily");
+    }
+
+    let streak = user.streak || 0;
+    if (now - last > ONE_DAY * 2) streak = 0;
+
+    streak++;
+
+    const reward =
+      config.daily.baseSpins +
+      streak * config.daily.streakBonus;
+
+    db.prepare(`
+      UPDATE users
+      SET spins = spins + ?, streak = ?, last_daily = ?
+      WHERE discord_id = ?
+    `).run(reward, streak, now, interaction.user.id);
+
+    return interaction.reply(`🎁 +${reward} spins | 🔥 ${streak} streak`);
   }
 
   // =====================
@@ -221,7 +284,7 @@ client.on("interactionCreate", async (interaction) => {
       .get(interaction.user.id);
 
     return interaction.reply(
-      `📊 Stats\n\n🎰 Spins: ${user?.spins || 0}\n💬 Messages: ${user?.messages || 0}\n🎮 MC: ${user?.mc_username || "Not linked"}`
+      `📊 Stats\n\n🎰 Spins: ${user?.spins || 0}\n💬 Messages: ${user?.messages || 0}\n🔥 Streak: ${user?.streak || 0}\n🎮 MC: ${user?.mc_username || "Not linked"}`
     );
   }
 
@@ -231,9 +294,9 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "leaderboard") {
 
     const rows = db.prepare(`
-      SELECT mc_username, spins 
-      FROM users 
-      ORDER BY spins DESC 
+      SELECT mc_username, spins
+      FROM users
+      ORDER BY spins DESC
       LIMIT 10
     `).all();
 
@@ -245,36 +308,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   // =====================
-  // 🎁 DAILY
-  // =====================
-  if (interaction.commandName === "daily") {
-
-    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(interaction.user.id);
-
-    const now = Date.now();
-    const last = user?.last_daily || 0;
-
-    const day = 86400000;
-
-    if (now - last < day) {
-      return interaction.reply("❌ Already claimed daily");
-    }
-
-    const streak = (user?.streak || 0) + 1;
-    const reward = 5 + streak * 2;
-
-    db.prepare(`
-      UPDATE users 
-      SET spins = spins + ?, last_daily = ?, streak = ?
-      WHERE discord_id = ?
-    `).run(reward, now, streak, interaction.user.id);
-
-    return interaction.reply(`🎁 +${reward} spins | 🔥 streak ${streak}`);
-  }
-
-  // =====================
-  // 🛠️ ADMIN SPINS
+  // 🛠️ GIVE SPINS
   // =====================
   if (interaction.commandName === "givespins") {
 
@@ -283,13 +317,13 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     const user = interaction.options.getUser("user");
-    const amt = interaction.options.getInteger("amount");
+    const amount = interaction.options.getInteger("amount");
 
     db.prepare(`
       UPDATE users SET spins = spins + ? WHERE discord_id = ?
-    `).run(amt, user.id);
+    `).run(amount, user.id);
 
-    return interaction.reply(`🎰 Gave ${amt} spins`);
+    return interaction.reply(`🎰 Gave ${amount} spins`);
   }
 });
 
@@ -322,7 +356,7 @@ setInterval(async () => {
         pendingLinks.delete(id);
       }
     }
-  } catch (e) {}
+  } catch {}
 }, 5000);
 
 // =====================
