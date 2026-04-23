@@ -4,45 +4,64 @@ import db from "./database.js";
 import config from "./config.js";
 import { Rcon } from "rcon-client";
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
-});
+// 🌏 Weekend checker (Singapore time)
+function isWeekend() {
+  const now = new Date();
 
-// 🔌 Connect RCON
-const rcon = await Rcon.connect({
-  host: process.env.RCON_HOST,
-  port: Number(process.env.RCON_PORT),
-  password: process.env.RCON_PASSWORD
-});
+  // convert to Singapore time
+  const sgTime = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Singapore" })
+  );
 
-console.log("✅ Connected to Minecraft RCON");
+  const day = sgTime.getDay(); // 0 = Sun, 6 = Sat
+  return day === 0 || day === 6;
+}
+
+// ⚡ Base luck system
+function getLuckMultiplier(userId, config) {
+  const base = config.reward.luckyUsers?.[userId] || 1;
+
+  const devBoost =
+    config.reward.devMode
+      ? (config.reward.devUsers?.[userId] || 1)
+      : 1;
+
+  const weekendBoost = isWeekend() ? 2 : 1;
+
+  return base * devBoost * weekendBoost;
+}
 
 // 🎲 Weighted reward picker
-function getRandomReward(pool) {
-  const totalWeight = pool.reduce((sum, item) => sum + item.chance, 0);
+function getRandomReward(pool, multiplier = 1) {
+  const totalWeight = pool.reduce(
+    (sum, item) => sum + item.chance * multiplier,
+    0
+  );
+
   let random = Math.random() * totalWeight;
 
   for (const item of pool) {
-    if (random < item.chance) return item.cmd;
-    random -= item.chance;
+    const weight = item.chance * multiplier;
+    if (random < weight) return item.cmd;
+    random -= weight;
   }
 }
 
-// 🎰 Special rolls
-function rollSpecialRewards(player) {
+// 🎰 Special rewards (elytra + jackpot)
+function rollSpecialRewards(player, multiplier = 1) {
+  let jackpotChance = 0.000000001;
+  let elytraChance = 0.00001;
+
+  jackpotChance *= multiplier;
+  elytraChance *= multiplier;
+
   const roll = Math.random();
 
-  // 💥 JACKPOT (0.0000001%)
-  if (roll < 0.000000001) {
+  if (roll < jackpotChance) {
     return { type: "jackpot" };
   }
 
-  // 🪽 ELYTRA (0.001%)
-  if (roll < 0.00001) {
+  if (roll < elytraChance) {
     return {
       type: "elytra",
       cmd: `give ${player} elytra 1`
@@ -51,6 +70,24 @@ function rollSpecialRewards(player) {
 
   return null;
 }
+
+// 🤖 Bot setup
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// 🔌 RCON connect
+const rcon = await Rcon.connect({
+  host: process.env.RCON_HOST,
+  port: Number(process.env.RCON_PORT),
+  password: process.env.RCON_PASSWORD
+});
+
+console.log("✅ Connected to Minecraft RCON");
 
 client.on("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -61,13 +98,10 @@ client.on("messageCreate", async (message) => {
 
   const args = message.content.split(" ");
 
-  // 🔗 LINK COMMAND
+  // 🔗 LINK
   if (args[0] === "!link") {
     const username = args[1];
-
-    if (!username) {
-      return message.reply("Usage: !link <minecraft_username>");
-    }
+    if (!username) return message.reply("Usage: !link <minecraft_username>");
 
     db.prepare(`
       INSERT INTO users (discord_id, mc_username)
@@ -94,7 +128,6 @@ client.on("messageCreate", async (message) => {
   const now = Date.now();
   const cooldown = config.cooldownSeconds * 1000;
 
-  // ⏱️ Cooldown check
   if (now - user.last_message < cooldown) return;
 
   const newCount = user.messages + 1;
@@ -110,12 +143,13 @@ client.on("messageCreate", async (message) => {
   // 🎁 REWARD TRIGGER
   if (newCount >= config.reward.messagesRequired && user.mc_username) {
 
-    const special = rollSpecialRewards(user.mc_username);
+    const multiplier = getLuckMultiplier(message.author.id, config);
+    const special = rollSpecialRewards(user.mc_username, multiplier);
 
     try {
 
-      // 💥 JACKPOT (BALANCED)
-      if (special && special.type === "jackpot") {
+      // 💥 JACKPOT
+      if (special?.type === "jackpot") {
 
         const player = user.mc_username;
 
@@ -126,43 +160,49 @@ client.on("messageCreate", async (message) => {
         await rcon.send(`give ${player} beacon 1`);
         await rcon.send(`give ${player} breeze_rod 32`);
 
-        // 🪓 Mace with Wind Burst I
         await rcon.send(
           `give ${player} mace{Enchantments:[{id:"wind_burst",lvl:1}]} 1`
         );
 
         message.channel.send(
-          `💥💥💥 JACKPOT!!! ${message.author} just won a WIND BURST MACE + MEGA LOOT!!!`
+          `💥 JACKPOT!!! ${message.author} got MEGA LOOT + WIND BURST MACE!`
         );
       }
 
       // 🪽 ELYTRA
-      else if (special && special.type === "elytra") {
+      else if (special?.type === "elytra") {
         await rcon.send(special.cmd);
 
         message.channel.send(
-          `🪽🔥 ${message.author} JUST WON AN ELYTRA (0.001%)!!!`
+          `🪽 ${message.author} got an ELYTRA!`
         );
       }
 
       // 🎲 NORMAL REWARD
       else {
-        const rewardCmd = getRandomReward(config.reward.pool);
-        const command = rewardCmd.replace("{player}", user.mc_username);
+        const rewardCmd = getRandomReward(
+          config.reward.pool,
+          multiplier
+        );
+
+        const command = rewardCmd.replace(
+          "{player}",
+          user.mc_username
+        );
 
         await rcon.send(command);
 
-        message.reply(`🎉 You received: ${command}`);
+        message.reply(`🎁 Reward: ${command}`);
       }
 
-      // 🔄 Reset counter
+      // 🔄 RESET
       db.prepare(`
         UPDATE users SET messages = 0 WHERE discord_id = ?
       `).run(message.author.id);
 
     } catch (err) {
       console.error(err);
-      message.reply("❌ Error giving reward.");
+      message.reply("❌ Reward error.");
     }
   }
 });
