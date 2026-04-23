@@ -32,7 +32,7 @@ function getRandomReward(pool) {
   }
 }
 
-// 🎰 Special rolls (ELYTRA + JACKPOT)
+// 🎰 Special rolls
 function rollSpecialRewards(player) {
   const roll = Math.random();
 
@@ -114,15 +114,25 @@ client.on("messageCreate", async (message) => {
 
     try {
 
-      // 💥 JACKPOT
+      // 💥 JACKPOT (BALANCED)
       if (special && special.type === "jackpot") {
-        for (const item of config.reward.pool) {
-          const cmd = item.cmd.replace("{player}", user.mc_username);
-          await rcon.send(cmd);
-        }
+
+        const player = user.mc_username;
+
+        await rcon.send(`give ${player} iron_block 16`);
+        await rcon.send(`give ${player} gold_block 8`);
+        await rcon.send(`give ${player} netherite_block 1`);
+        await rcon.send(`give ${player} diamond_block 2`);
+        await rcon.send(`give ${player} beacon 1`);
+        await rcon.send(`give ${player} breeze_rod 32`);
+
+        // 🪓 Mace with Wind Burst I
+        await rcon.send(
+          `give ${player} mace{Enchantments:[{id:"wind_burst",lvl:1}]} 1`
+        );
 
         message.channel.send(
-          `💥💥 JACKPOT!!! ${message.author} received ALL rewards!!!`
+          `💥💥💥 JACKPOT!!! ${message.author} just won a WIND BURST MACE + MEGA LOOT!!!`
         );
       }
 
