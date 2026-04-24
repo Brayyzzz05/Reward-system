@@ -9,6 +9,7 @@ import {
 
 import pool from "./database.js";
 import config from "./config.js";
+import { deliverReward, startRewardWorker } from "./rewardSystem.js";
 
 // =====================
 // CLIENT
@@ -22,19 +23,14 @@ const client = new Client({
 });
 
 // =====================
-// DB WRAPPER
+// DB HELPER
 // =====================
 async function db(q, p = []) {
-  try {
-    return await pool.query(q, p);
-  } catch (e) {
-    console.error("DB ERROR:", e.message);
-    throw e;
-  }
+  return pool.query(q, p);
 }
 
 // =====================
-// USER INIT
+// USER FETCH / CREATE
 // =====================
 async function getUser(id) {
   await db(`
@@ -52,7 +48,7 @@ async function getUser(id) {
 }
 
 // =====================
-// MESSAGE TRACKER
+// MESSAGE TRACKER (CURRENCY)
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -69,6 +65,7 @@ client.on("messageCreate", async (m) => {
 // COMMANDS
 // =====================
 const commands = [];
+
 const add = (cmd) => commands.push(cmd.toJSON());
 
 // USER
@@ -77,6 +74,18 @@ add(new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"));
 add(new SlashCommandBuilder().setName("daily").setDescription("Daily reward"));
 add(new SlashCommandBuilder().setName("shop").setDescription("Shop"));
 add(new SlashCommandBuilder().setName("odds").setDescription("View odds"));
+
+// VERIFY (MC LINK)
+add(
+  new SlashCommandBuilder()
+    .setName("verify")
+    .setDescription("Link Minecraft account")
+    .addStringOption(o =>
+      o.setName("username")
+        .setDescription("Minecraft username")
+        .setRequired(true)
+    )
+);
 
 // BUY
 add(
@@ -123,7 +132,7 @@ add(
 // =====================
 // REGISTER COMMANDS
 // =====================
-const registerCommands = async () => {
+async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   await rest.put(
@@ -135,18 +144,19 @@ const registerCommands = async () => {
   );
 
   console.log("✅ Commands registered");
-};
+}
 
 // =====================
-// READY (FIXED FUTURE SAFE)
+// READY
 // =====================
-const onReady = async () => {
+client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-  await registerCommands();
-};
 
-client.once("ready", onReady);
-client.once("clientReady", onReady);
+  await registerCommands();
+
+  // 🔁 START REWARD SYSTEM WORKER
+  startRewardWorker();
+});
 
 // =====================
 // HELPERS
@@ -162,10 +172,23 @@ client.on("interactionCreate", async (i) => {
   try {
     if (!i.isChatInputCommand()) return;
 
-    const id = i.user.id;
-    const u = await getUser(id);
-
+    const u = await getUser(i.user.id);
     const isAdmin = i.memberPermissions?.has("Administrator");
+
+    // =====================
+    // VERIFY
+    // =====================
+    if (i.commandName === "verify") {
+      const name = i.options.getString("username");
+
+      await db(`
+        UPDATE users
+        SET minecraft_name=$1
+        WHERE discord_id=$2
+      `, [name, i.user.id]);
+
+      return reply(i, `✅ Linked to Minecraft: **${name}**`);
+    }
 
     // =====================
     // STATS
@@ -175,7 +198,7 @@ client.on("interactionCreate", async (i) => {
 `📊 Stats
 💬 Messages: ${u.messages}
 🎟 Spins: ${u.spins}
-🍀 Luck: x${u.luck_multi}`
+🍀 Luck: ${u.luck_multi}`
       );
     }
 
@@ -214,7 +237,7 @@ Use /buy`
           SET spins = spins + $1,
               messages = messages - $2
           WHERE discord_id=$3
-        `, [amount, cost, id]);
+        `, [amount, cost, i.user.id]);
 
         return reply(i, `🎟 bought ${amount} spins`);
       }
@@ -230,7 +253,7 @@ Use /buy`
           SET luck_multi = luck_multi + $1,
               messages = messages - $2
           WHERE discord_id=$3
-        `, [amount, cost, id]);
+        `, [amount, cost, i.user.id]);
 
         return reply(i, `🍀 bought ${amount} luck`);
       }
@@ -239,7 +262,7 @@ Use /buy`
     }
 
     // =====================
-    // DAILY (24h COOLDOWN)
+    // DAILY
     // =====================
     if (i.commandName === "daily") {
       const now = Date.now();
@@ -252,7 +275,7 @@ Use /buy`
         SET spins = spins + 2,
             last_daily = $1
         WHERE discord_id=$2
-      `, [now, id]);
+      `, [now, i.user.id]);
 
       return reply(i, "🎁 +2 spins");
     }
@@ -274,14 +297,17 @@ Use /buy`
     }
 
     // =====================
-    // ROLL
+    // ROLL (REWARD DELIVERY)
     // =====================
     if (i.commandName === "roll") {
+
+      if (!u.minecraft_name)
+        return reply(i, "❌ Use /verify first");
 
       if (u.spins <= 0)
         return reply(i, "❌ no spins");
 
-      await db("UPDATE users SET spins = spins - 1 WHERE discord_id=$1", [id]);
+      await db("UPDATE users SET spins = spins - 1 WHERE discord_id=$1", [i.user.id]);
 
       const pool = config.reward.pool;
       let total = pool.reduce((a,b)=>a+b.chance,0);
@@ -297,46 +323,39 @@ Use /buy`
         r -= p.chance;
       }
 
-      await i.reply("🎰 spinning...");
-      await new Promise(r => setTimeout(r, 1000));
+      await deliverReward(i.user.id, u.minecraft_name, result.cmd);
 
-      return i.editReply(`🎉 ${result.cmd}`);
+      return reply(i, "🎰 Reward processing...");
     }
 
     // =====================
-    // ADMIN CHECK
+    // ADMIN
     // =====================
     if (!isAdmin &&
       ["setspins","setmessages","setluck"].includes(i.commandName)) {
       return reply(i, "❌ admin only");
     }
 
-    // =====================
-    // ADMIN SETTERS
-    // =====================
     if (i.commandName === "setspins") {
       await db("UPDATE users SET spins=$1 WHERE discord_id=$2",
         [i.options.getInteger("amount"), i.options.getUser("user").id]);
-
       return reply(i, "✅ done");
     }
 
     if (i.commandName === "setmessages") {
       await db("UPDATE users SET messages=$1 WHERE discord_id=$2",
         [i.options.getInteger("amount"), i.options.getUser("user").id]);
-
       return reply(i, "✅ done");
     }
 
     if (i.commandName === "setluck") {
       await db("UPDATE users SET luck_multi=$1 WHERE discord_id=$2",
         [i.options.getNumber("amount"), i.options.getUser("user").id]);
-
       return reply(i, "✅ done");
     }
 
   } catch (e) {
-    console.error("ERROR:", e);
+    console.error(e);
   }
 });
 
