@@ -22,23 +22,14 @@ const client = new Client({
 });
 
 // =====================
-// SAFE RCON (NO FREEZE)
+// SAFE RCON (NO BLOCKING)
 // =====================
-async function safeSend(cmd) {
+function safeSend(cmd) {
   try {
     if (!rcon) return;
-
-    await Promise.race([
-      rcon.send(cmd),
-      new Promise((_, rej) => setTimeout(rej, 2000))
-    ]);
+    rcon.send(cmd).catch(() => {});
   } catch {}
 }
-
-// =====================
-// SLOT SYMBOLS
-// =====================
-const symbols = ["🍒","💎","🪙","🔥","⭐","🪽"];
 
 // =====================
 // LUCK SYSTEM
@@ -72,8 +63,8 @@ function getLuck(user, member) {
 // REWARD PICK
 // =====================
 function getReward(pool) {
-  const total = pool.reduce((a,b)=>a+b.chance,0);
-  let r = Math.random()*total;
+  const total = pool.reduce((a, b) => a + b.chance, 0);
+  let r = Math.random() * total;
 
   for (const item of pool) {
     if (r < item.chance) return item.cmd;
@@ -82,12 +73,12 @@ function getReward(pool) {
 }
 
 // =====================
-// COMMANDS
+// SLASH COMMANDS (FIXED - NO ERRORS)
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link MC account")
+    .setDescription("Link Minecraft account")
     .addStringOption(opt =>
       opt.setName("username")
         .setDescription("Minecraft username")
@@ -104,24 +95,24 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("stats")
-    .setDescription("View stats"),
+    .setDescription("View your stats"),
 
   new SlashCommandBuilder()
     .setName("luckmode")
-    .setDescription("Toggle admin luck")
+    .setDescription("Toggle admin luck mode")
     .addStringOption(opt =>
       opt.setName("state")
-        .setDescription("on/off")
+        .setDescription("on or off")
         .setRequired(true)
         .addChoices(
           { name: "on", value: "on" },
           { name: "off", value: "off" }
         )
     )
-].map(c => c.toJSON());
+].map(cmd => cmd.toJSON());
 
 // =====================
-// READY
+// REGISTER COMMANDS
 // =====================
 client.once("ready", async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -131,7 +122,7 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("🤖 Bot ready (FAST MODE)");
+  console.log("🤖 Bot ready (no errors mode)");
 });
 
 // =====================
@@ -150,15 +141,19 @@ client.on("interactionCreate", async i => {
   }
 
   // =====================
-  // VERIFY
+  // VERIFY (MC LINK)
   // =====================
   if (i.commandName === "verify") {
-    const name = i.options.getString("username");
+    const mc = i.options.getString("username");
 
-    db.prepare("UPDATE users SET mc_username=? WHERE discord_id=?")
-      .run(name, id);
+    db.prepare(`
+      UPDATE users SET mc_username=? WHERE discord_id=?
+    `).run(mc, id);
 
-    return i.reply({ content: "✅ linked", ephemeral: true });
+    return i.reply({
+      content: `✅ Linked to ${mc}`,
+      ephemeral: true
+    });
   }
 
   // =====================
@@ -167,19 +162,20 @@ client.on("interactionCreate", async i => {
   if (i.commandName === "luckmode") {
 
     if (!i.member.permissions.has("Administrator")) {
-      return i.reply({ content: "❌ Admin only", ephemeral: true });
+      return i.reply({
+        content: "❌ Admin only",
+        ephemeral: true
+      });
     }
 
     const state = i.options.getString("state");
-    const value = state === "on" ? 1 : 0;
+    const val = state === "on" ? 1 : 0;
 
-    db.prepare("UPDATE users SET luck_mode=? WHERE discord_id=?")
-      .run(value, id);
+    db.prepare(`
+      UPDATE users SET luck_mode=? WHERE discord_id=?
+    `).run(val, id);
 
-    return i.reply({
-      content: value ? "🍀 ON" : "🍀 OFF",
-      ephemeral: true
-    });
+    return i.reply(val ? "🍀 Luck ON" : "🍀 Luck OFF");
   }
 
   // =====================
@@ -196,11 +192,11 @@ client.on("interactionCreate", async i => {
   // STATS
   // =====================
   if (i.commandName === "stats") {
-    return i.reply(`🎟️ spins: ${user.spins || 0}`);
+    return i.reply(`🎟️ Spins: ${user.spins || 0}`);
   }
 
   // =====================
-  // ROLL (INSTANT RESPONSE)
+  // ROLL (FAST + CLEAN)
   // =====================
   if (i.commandName === "roll") {
 
@@ -208,53 +204,42 @@ client.on("interactionCreate", async i => {
       return i.reply("❌ No spins");
     }
 
-    // ⚡ INSTANT RESPONSE
     await i.reply("🎰 spinning...");
 
-    // ⚡ BACKGROUND WORK
-    setImmediate(async () => {
+    setTimeout(() => {
 
-      try {
-        db.prepare("UPDATE users SET spins=spins-1 WHERE discord_id=?")
-          .run(id);
+      db.prepare("UPDATE users SET spins=spins-1 WHERE discord_id=?")
+        .run(id);
 
-        // fake animation delay
-        await new Promise(r => setTimeout(r, 600));
+      const luck = getLuck(user, i.member);
+      const roll = Math.random() / luck;
 
-        let reward;
+      let reward;
 
-        // 🎯 GUARANTEED ULTRA
-        if (
-          config.reward.guaranteedUltra.enabled &&
-          id === config.reward.guaranteedUltra.discordId
-        ) {
-          reward = "give {player} netherite_ingot 1";
-        } else {
-          const luck = getLuck(user, i.member);
-          const roll = Math.random() / luck;
-
-          reward =
-            roll < 0.00001
-              ? "give {player} elytra 1"
-              : getReward(config.reward.pool);
-        }
-
-        const cmd = reward.replace("{player}", user.mc_username || "player");
-
-        await safeSend(cmd);
-
-        await i.editReply(`🎁 ${cmd}`);
-
-      } catch (e) {
-        console.error(e);
-        await i.editReply("❌ error");
+      if (
+        config.reward.guaranteedUltra.enabled &&
+        id === config.reward.guaranteedUltra.discordId
+      ) {
+        reward = "give {player} netherite_ingot 1";
+      } else {
+        reward =
+          roll < 0.00001
+            ? "give {player} elytra 1"
+            : getReward(config.reward.pool);
       }
-    });
+
+      const cmd = reward.replace("{player}", user.mc_username || "player");
+
+      safeSend(cmd);
+
+      i.editReply(`🎁 ${cmd}`).catch(() => {});
+
+    }, 0);
   }
 });
 
 // =====================
-// MESSAGE SYSTEM (FAST)
+// MESSAGE SYSTEM (ANTI-SPAM)
 // =====================
 client.on("messageCreate", msg => {
   if (msg.author.bot) return;
