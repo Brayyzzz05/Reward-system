@@ -1,7 +1,11 @@
 import Rcon from "rcon-client";
 
-let rcon;
+let rcon = null;
+let connected = false;
 
+// =====================
+// CONNECT (NON-BLOCKING)
+// =====================
 export async function connectRcon() {
   try {
     rcon = await Rcon.Rcon.connect({
@@ -10,13 +14,28 @@ export async function connectRcon() {
       password: process.env.RCON_PASSWORD
     });
 
+    connected = true;
     console.log("🎮 RCON connected");
   } catch (err) {
-    console.log("⚠️ RCON offline, bot still running");
+    connected = false;
+    console.log("⚠️ RCON offline — bot still running");
   }
 }
 
+// =====================
+// SAFE COMMAND RUNNER
+// =====================
 export async function runCommand(cmd) {
-  if (!rcon) throw new Error("RCON not connected");
-  return rcon.send(cmd);
+  if (!connected || !rcon) {
+    throw new Error("RCON_OFFLINE");
+  }
+
+  return await rcon.send(cmd);
+}
+
+// =====================
+// STATUS
+// =====================
+export function isRconOnline() {
+  return connected;
 }
