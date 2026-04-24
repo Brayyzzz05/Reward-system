@@ -1,18 +1,81 @@
-import 'dotenv/config';
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
 import {
   Client,
   GatewayIntentBits,
+  SlashCommandBuilder,
   REST,
-  Routes,
-  SlashCommandBuilder
+  Routes
 } from "discord.js";
 
+import crypto from "crypto";
 import db from "./database.js";
 import config from "./config.js";
-import crypto from "crypto";
 
 // =====================
-// CLIENT
+// EXPRESS ADMIN PANEL (INSIDE BOT)
+// =====================
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const ADMIN_KEY = process.env.ADMIN_KEY;
+
+// auth middleware
+function auth(req, res, next) {
+  if (req.headers.authorization !== ADMIN_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  next();
+}
+
+// GET USERS
+app.get("/users", auth, async (req, res) => {
+  const data = await db.query("SELECT * FROM users");
+  res.json(data.rows);
+});
+
+// SET SPINS
+app.post("/set-spins", auth, async (req, res) => {
+  const { discord_id, spins } = req.body;
+
+  await db.query(
+    "UPDATE users SET spins=$1 WHERE discord_id=$2",
+    [spins, discord_id]
+  );
+
+  res.json({ ok: true });
+});
+
+// SET LUCK
+app.post("/set-luck", auth, async (req, res) => {
+  const { discord_id, luck } = req.body;
+
+  await db.query(
+    "UPDATE users SET luck_multi=$1 WHERE discord_id=$2",
+    [luck, discord_id]
+  );
+
+  res.json({ ok: true });
+});
+
+// VIEW QUEUE
+app.get("/queue", auth, async (req, res) => {
+  const q = await db.query(
+    "SELECT * FROM reward_queue WHERE status='pending'"
+  );
+
+  res.json(q.rows);
+});
+
+// START ADMIN SERVER
+app.listen(3000, () => {
+  console.log("🌐 Admin panel running on port 3000");
+});
+
+// =====================
+// DISCORD BOT
 // =====================
 const client = new Client({
   intents: [
@@ -22,104 +85,67 @@ const client = new Client({
   ]
 });
 
-// =====================
-// GLOBAL SAFETY (CRASH STOPPER)
-// =====================
-process.on("unhandledRejection", (err) => {
-  console.error("⚠️ UnhandledRejection:", err);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("⚠️ UncaughtException:", err);
-});
+// safety
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
 
 // =====================
-// DB WRAPPER SAFE
+// DB WRAPPER
 // =====================
-const query = (q, p = []) => db.query(q, p);
+const query = (q, p=[]) => db.query(q,p);
 
 // =====================
-// SAFE REPLY (FIXES "NOT RESPONDING")
+// HASH
 // =====================
-async function safeReply(i, content) {
-  try {
-    if (i.deferred || i.replied) {
-      return i.followUp({ content, ephemeral: true });
-    }
-    return i.reply({ content, ephemeral: true });
-  } catch (e) {
-    console.error("Reply error:", e);
-  }
+function hash(a,b){
+  return crypto.createHash("sha256").update(a+b).digest("hex");
 }
 
 // =====================
-// RCON SAFE WRAPPER
+// RCON
 // =====================
-async function runCommand(cmd) {
-  try {
-    if (!global.rconSend) throw new Error("RCON missing");
-    return await global.rconSend(cmd);
-  } catch (e) {
-    throw e;
-  }
+async function run(cmd){
+  if(!global.rconSend) throw new Error("RCON missing");
+  return global.rconSend(cmd);
 }
 
 // =====================
-// USER FETCH SAFE
+// USER FETCH
 // =====================
-async function getUser(id) {
-  await query(`
-    INSERT INTO users (discord_id)
-    VALUES ($1)
-    ON CONFLICT DO NOTHING
-  `, [id]);
+async function getUser(id){
+  await query(
+    "INSERT INTO users (discord_id) VALUES ($1) ON CONFLICT DO NOTHING",
+    [id]
+  );
 
   const res = await query(
     "SELECT * FROM users WHERE discord_id=$1",
     [id]
   );
 
-  return res.rows[0] || {
-    messages: 0,
-    spins: 0,
-    luck_multi: 0
-  };
+  return res.rows[0] || {};
 }
 
 // =====================
 // MESSAGE TRACKER
 // =====================
-client.on("messageCreate", async (m) => {
-  if (!m.guild || m.author.bot) return;
+client.on("messageCreate", async (m)=>{
+  if(!m.guild || m.author.bot) return;
 
-  try {
-    await query(`
-      INSERT INTO users (discord_id, messages)
-      VALUES ($1, 1)
-      ON CONFLICT (discord_id)
-      DO UPDATE SET messages = users.messages + 1
-    `, [m.author.id]);
-  } catch (e) {
-    console.error("Message track error:", e);
-  }
+  await query(
+    `UPDATE users
+     SET messages = COALESCE(messages,0)+1
+     WHERE discord_id=$1`,
+    [m.author.id]
+  ).catch(()=>{});
 });
 
 // =====================
-// HASH
+// REWARD SYSTEM
 // =====================
-function hash(id, cmd) {
-  return crypto
-    .createHash("sha256")
-    .update(id + cmd + Date.now())
-    .digest("hex");
-}
-
-// =====================
-// REWARD DELIVERY (QUEUE SAFE)
-// =====================
-async function deliverReward(discordId, mcName, cmd) {
-  const finalCmd = cmd.replace("{player}", mcName);
-  const h = hash(discordId, finalCmd);
+async function giveReward(id, mc, cmd){
+  const final = cmd.replace("{player}", mc);
+  const h = hash(id, final);
 
   try {
     const exists = await query(
@@ -127,23 +153,24 @@ async function deliverReward(discordId, mcName, cmd) {
       [h]
     );
 
-    if (exists.rows.length > 0) return;
+    if(exists.rows.length) return;
 
-    await runCommand(finalCmd);
+    await run(final);
 
     await query(
-      "INSERT INTO delivered_rewards (reward_hash) VALUES ($1)",
+      `INSERT INTO delivered_rewards (reward_hash)
+       VALUES ($1)
+       ON CONFLICT DO NOTHING`,
       [h]
     );
 
-  } catch (e) {
-    console.warn("Queueing reward (server offline)");
-
-    await query(`
-      INSERT INTO reward_queue
-      (discord_id, minecraft_name, command, reward_hash, status, created_at)
-      VALUES ($1,$2,$3,$4,'pending',$5)
-    `, [discordId, mcName, finalCmd, h, Date.now()]);
+  } catch {
+    await query(
+      `INSERT INTO reward_queue
+       (discord_id,minecraft_name,command,reward_hash,status,created_at)
+       VALUES ($1,$2,$3,$4,'pending',$5)`,
+      [id, mc, final, h, Date.now()]
+    );
   }
 }
 
@@ -152,15 +179,13 @@ async function deliverReward(discordId, mcName, cmd) {
 // =====================
 setInterval(async () => {
   try {
-    const res = await query(`
-      SELECT * FROM reward_queue
-      WHERE status='pending'
-      LIMIT 20
-    `);
+    const q = await query(
+      "SELECT * FROM reward_queue WHERE status='pending' LIMIT 20"
+    );
 
-    for (const r of res.rows) {
+    for (const r of q.rows) {
       try {
-        await runCommand(r.command);
+        await run(r.command);
 
         await query(
           "UPDATE reward_queue SET status='delivered' WHERE id=$1",
@@ -168,78 +193,49 @@ setInterval(async () => {
         );
 
         await query(
-          "INSERT INTO delivered_rewards (reward_hash)
-           VALUES ($1)
-           ON CONFLICT DO NOTHING",
+          "INSERT INTO delivered_rewards (reward_hash) VALUES ($1) ON CONFLICT DO NOTHING",
           [r.reward_hash]
         );
 
       } catch {}
     }
-  } catch (e) {
-    console.error("Queue worker error:", e);
-  }
+  } catch {}
 }, 5000);
 
 // =====================
 // COMMANDS
 // =====================
 const commands = [
+  new SlashCommandBuilder().setName("stats").setDescription("View stats"),
 
   new SlashCommandBuilder()
     .setName("verify")
     .setDescription("Link MC")
-    .addStringOption(o =>
-      o.setName("username").setRequired(true)),
+    .addStringOption(o => o.setName("username").setRequired(true)),
 
-  new SlashCommandBuilder().setName("stats").setDescription("Stats"),
   new SlashCommandBuilder().setName("shop").setDescription("Shop"),
-  new SlashCommandBuilder().setName("roll").setDescription("Spin"),
-
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription("Buy")
-    .addStringOption(o => o.setName("item").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("setspins")
-    .setDescription("Admin")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("setmessages")
-    .setDescription("Admin")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("setluck")
-    .setDescription("Admin")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addNumberOption(o => o.setName("amount").setRequired(true))
+  new SlashCommandBuilder().setName("roll").setDescription("Roll rewards")
 ];
 
 // =====================
-// REGISTER
+// REGISTER COMMANDS
 // =====================
-async function register() {
-  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+async function register(){
+  const rest = new REST({version:"10"}).setToken(process.env.TOKEN);
 
   await rest.put(
     Routes.applicationGuildCommands(
       process.env.CLIENT_ID,
       process.env.GUILD_ID
     ),
-    { body: commands.map(c => c.toJSON()) }
+    { body: commands.map(c=>c.toJSON()) }
   );
 
   console.log("✅ Commands registered");
 }
 
 // =====================
-// READY FIX (NO DEPRECATION ISSUES)
+// READY
 // =====================
 client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -247,149 +243,65 @@ client.once("ready", async () => {
 });
 
 // =====================
-// INTERACTIONS (FULL SAFE MODE)
+// INTERACTIONS
 // =====================
-client.on("interactionCreate", async (i) => {
-  if (!i.isChatInputCommand()) return;
-
-  await i.deferReply({ ephemeral: true });
-
-  let u;
+client.on("interactionCreate", async (i)=>{
+  if(!i.isChatInputCommand()) return;
 
   try {
-    u = await getUser(i.user.id);
-  } catch {
-    return safeReply(i, "❌ DB error");
-  }
+    await i.deferReply({ ephemeral: true });
 
-  const isAdmin = i.memberPermissions?.has("Administrator");
+    const u = await getUser(i.user.id);
 
-  // =====================
-  // VERIFY
-  // =====================
-  if (i.commandName === "verify") {
-    const name = i.options.getString("username");
-
-    try {
-      await query(`
-        INSERT INTO users (discord_id, minecraft_name)
-        VALUES ($1,$2)
-        ON CONFLICT (discord_id)
-        DO UPDATE SET minecraft_name=$2
-      `, [i.user.id, name]);
-
-      return safeReply(i, `✅ Linked ${name}`);
-    } catch {
-      return safeReply(i, "❌ verify failed");
+    if(i.commandName==="stats"){
+      return i.editReply(
+`💬 ${u.messages||0}
+🎟 ${u.spins||0}
+🍀 ${u.luck_multi||0}`
+      );
     }
-  }
 
-  // =====================
-  // STATS
-  // =====================
-  if (i.commandName === "stats") {
-    return safeReply(i,
-`💬 ${u.messages}
-🎟 ${u.spins}
-🍀 ${u.luck_multi}`);
-  }
+    if(i.commandName==="verify"){
+      const name=i.options.getString("username");
 
-  // =====================
-  // SHOP
-  // =====================
-  if (i.commandName === "shop") {
-    return safeReply(i,
-`🛒 spin x1 = 20 msgs
-spin x5 = 80 msgs
-luck x5 = 500 msgs`);
-  }
+      await query(
+        `INSERT INTO users (discord_id,minecraft_name)
+         VALUES ($1,$2)
+         ON CONFLICT (discord_id)
+         DO UPDATE SET minecraft_name=$2`,
+        [i.user.id,name]
+      );
 
-  // =====================
-  // BUY
-  // =====================
-  if (i.commandName === "buy") {
-    const item = i.options.getString("item");
-    const amount = i.options.getInteger("amount");
-
-    try {
-      if (item === "spin") {
-        await query(`
-          UPDATE users
-          SET messages = messages - ($1 * 20),
-              spins = spins + $1
-          WHERE discord_id=$2
-        `, [amount, i.user.id]);
-      }
-
-      if (item === "luck") {
-        await query(`
-          UPDATE users
-          SET messages = messages - ($1 * 100),
-              luck_multi = luck_multi + $1
-          WHERE discord_id=$2
-        `, [amount, i.user.id]);
-      }
-
-      return safeReply(i, "✅ purchased");
-    } catch {
-      return safeReply(i, "❌ buy failed");
+      return i.editReply("✅ linked");
     }
-  }
 
-  // =====================
-  // ROLL (SAFE)
-  // =====================
-  if (i.commandName === "roll") {
-    try {
-      if (!u.minecraft_name)
-        return safeReply(i, "❌ verify first");
+    if(i.commandName==="roll"){
+      if(!u.minecraft_name) return i.editReply("❌ verify first");
 
-      const pool = config.reward.pool;
-      let total = pool.reduce((a,b)=>a+b.chance,0);
-      let r = Math.random() * total;
+      const pool=config.reward.pool;
+      let total=pool.reduce((a,b)=>a+b.chance,0);
+      let r=Math.random()*total;
 
       let reward;
 
-      for (const p of pool) {
-        if (r < p.chance) {
-          reward = p;
+      for(const p of pool){
+        if(r<p.chance){
+          reward=p;
           break;
         }
-        r -= p.chance;
+        r-=p.chance;
       }
 
-      await deliverReward(i.user.id, u.minecraft_name, reward.cmd);
+      await giveReward(i.user.id,u.minecraft_name,reward.cmd);
 
-      return safeReply(i, "🎰 rolling...");
-    } catch {
-      return safeReply(i, "❌ roll failed");
+      return i.editReply("🎰 rolling reward...");
     }
-  }
 
-  // =====================
-  // ADMIN
-  // =====================
-  if (!isAdmin) return;
-
-  if (i.commandName === "setspins") {
-    await query("UPDATE users SET spins=$1 WHERE discord_id=$2", [
-      i.options.getInteger("amount"),
-      i.options.getUser("user").id
-    ]);
-  }
-
-  if (i.commandName === "setmessages") {
-    await query("UPDATE users SET messages=$1 WHERE discord_id=$2", [
-      i.options.getInteger("amount"),
-      i.options.getUser("user").id
-    ]);
-  }
-
-  if (i.commandName === "setluck") {
-    await query("UPDATE users SET luck_multi=$1 WHERE discord_id=$2", [
-      i.options.getNumber("amount"),
-      i.options.getUser("user").id
-    ]);
+  } catch(e){
+    console.error(e);
+    if(!i.replied){
+      await i.reply({content:"❌ error",ephemeral:true});
+    }
   }
 });
 
