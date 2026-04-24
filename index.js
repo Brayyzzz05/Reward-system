@@ -1,108 +1,69 @@
 import "dotenv/config";
-import {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes
-} from "discord.js";
+import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
 
 import { commands, handleInteraction } from "./commands.js";
 import { startRewardWorker } from "./rewardSystem.js";
-import { connectRcon } from "./rconHandler.js";
 import "./adminPanel.js";
 
 // =====================
 // CLIENT
 // =====================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// =====================
-// SAFETY NET (CRASH PREVENTION)
-// =====================
-process.on("unhandledRejection", (err) => {
-  console.error("❌ Unhandled Rejection:", err);
-});
+console.log("🚀 Booting bot...");
 
-process.on("uncaughtException", (err) => {
-  console.error("❌ Uncaught Exception:", err);
-});
+process.on("unhandledRejection", console.error);
+process.on("uncaughtException", console.error);
 
 // =====================
-// REGISTER SLASH COMMANDS
+// REGISTER COMMANDS
 // =====================
 async function registerCommands() {
-  try {
-    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
+  const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-    await rest.put(
-      Routes.applicationGuildCommands(
-        process.env.CLIENT_ID,
-        process.env.GUILD_ID
-      ),
-      {
-        body: commands.map(cmd => cmd.toJSON())
-      }
-    );
+  await rest.put(
+    Routes.applicationGuildCommands(
+      process.env.CLIENT_ID,
+      process.env.GUILD_ID
+    ),
+    { body: commands.map(c => c.toJSON()) }
+  );
 
-    console.log("✅ Slash commands registered");
-  } catch (err) {
-    console.error("❌ Command registration failed:", err);
-  }
+  console.log("✅ Commands registered");
 }
 
 // =====================
-// READY EVENT
+// READY
 // =====================
 client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 
-  // 1. Connect RCON FIRST (safe startup)
-  try {
-    await connectRcon();
-  } catch (err) {
-    console.error("⚠️ RCON failed to connect:", err.message);
-  }
-
-  // 2. Register commands
   await registerCommands();
 
-  // 3. Start reward worker (background system)
   startRewardWorker();
 
   console.log("⚡ Bot fully online");
 });
 
 // =====================
-// INTERACTION HANDLER
+// INTERACTIONS
 // =====================
 client.on("interactionCreate", async (interaction) => {
   try {
-    // ALWAYS defer safely first (prevents "not responding")
-    if (interaction.isChatInputCommand()) {
-      await interaction.deferReply({ ephemeral: true });
-    }
-
     await handleInteraction(interaction);
-
   } catch (err) {
-    console.error("❌ Interaction error:", err);
+    console.error(err);
 
     if (interaction.isRepliable() && !interaction.replied) {
       await interaction.reply({
-        content: "❌ Something went wrong",
+        content: "❌ Error occurred",
         ephemeral: true
       });
     }
   }
 });
 
-// =====================
-// LOGIN
 // =====================
 client.login(process.env.TOKEN);
