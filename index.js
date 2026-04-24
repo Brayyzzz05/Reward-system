@@ -3,7 +3,6 @@ import { Client, GatewayIntentBits, REST, Routes } from "discord.js";
 
 import { commands, handleInteraction } from "./commands.js";
 import { startRewardWorker } from "./rewardSystem.js";
-import "./adminPanel.js";
 
 // =====================
 // CLIENT
