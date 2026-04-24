@@ -12,28 +12,35 @@ import config from "./config.js";
 import { Rcon } from "rcon-client";
 
 // =====================
-// 🤖 BOT CLIENT
+// ⚠️ ENV CHECK (prevents silent failure)
+// =====================
+if (!process.env.TOKEN) {
+  console.error("❌ Missing TOKEN in .env");
+  process.exit(1);
+}
+
+if (!process.env.CLIENT_ID) {
+  console.error("❌ Missing CLIENT_ID in .env");
+  process.exit(1);
+}
+
+if (!process.env.GUILD_ID) {
+  console.error("❌ Missing GUILD_ID in .env");
+  process.exit(1);
+}
+
+// =====================
+// 🤖 CLIENT
 // =====================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 // =====================
-// 📦 STATE
+// 🔌 SAFE RCON (optional)
 // =====================
-const pendingLinks = new Map();
-const messageCooldown = new Map();
-
 let rcon = null;
-let serverOnline = false;
 
-// =====================
-// 🔌 SAFE RCON CONNECT (NO CRASH)
-// =====================
 async function connectRcon() {
   try {
     rcon = await Rcon.connect({
@@ -41,13 +48,10 @@ async function connectRcon() {
       port: Number(process.env.RCON_PORT),
       password: process.env.RCON_PASSWORD
     });
-
-    serverOnline = true;
     console.log("✅ RCON Connected");
-  } catch (err) {
+  } catch {
+    console.log("⚠️ RCON offline (this is fine)");
     rcon = null;
-    serverOnline = false;
-    console.log("⚠️ RCON offline — bot still running");
   }
 }
 
@@ -55,76 +59,47 @@ connectRcon();
 setInterval(connectRcon, 10000);
 
 // =====================
-// 🛡️ SAFE SEND (QUEUE SYSTEM)
+// 🛡️ SAFE SEND
 // =====================
-async function safeSend(cmd, userId = null) {
+async function safeSend(cmd) {
+  if (!rcon) return false;
   try {
-    if (!rcon) throw new Error("offline");
-
     await rcon.send(cmd);
     return true;
-
   } catch {
-
-    if (userId) {
-      const user = db.prepare("SELECT reward_queue FROM users WHERE discord_id = ?")
-        .get(userId);
-
-      const queue = user?.reward_queue ? JSON.parse(user.reward_queue) : [];
-      queue.push(cmd);
-
-      db.prepare(`
-        UPDATE users SET reward_queue = ? WHERE discord_id = ?
-      `).run(JSON.stringify(queue), userId);
-    }
-
     return false;
   }
 }
 
 // =====================
-// 🌙 WEEKEND LUCK
+// 🎲 REWARD
 // =====================
-function isWeekend() {
-  const now = new Date();
-  const sg = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Singapore" }));
-  return sg.getDay() === 0 || sg.getDay() === 6;
-}
-
-function luckMultiplier() {
-  return isWeekend() ? 2 : 1;
-}
-
-// =====================
-// 🎲 LOOT SYSTEM
-// =====================
-function getReward(pool, mult = 1) {
-  const total = pool.reduce((a, b) => a + b.chance * mult, 0);
+function getReward(pool) {
+  const total = pool.reduce((a, b) => a + b.chance, 0);
   let r = Math.random() * total;
 
   for (const item of pool) {
-    const w = item.chance * mult;
-    if (r < w) return item.cmd;
-    r -= w;
+    if (r < item.chance) return item.cmd;
+    r -= item.chance;
   }
 }
 
 // =====================
-// 🔧 SLASH COMMANDS (FIXED)
+// 📦 COMMANDS (VALID)
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link Minecraft account")
+    .setDescription("Link your Minecraft account")
     .addStringOption(opt =>
       opt.setName("username")
-        .setDescription("Minecraft username")
+        .setDescription("Your Minecraft username")
         .setRequired(true)
     ),
 
   new SlashCommandBuilder()
     .setName("roll")
-    .setDescription("Spin reward wheel"),
+    .setDescription("Roll for a reward"),
 
   new SlashCommandBuilder()
     .setName("daily")
@@ -132,7 +107,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("stats")
-    .setDescription("View stats"),
+    .setDescription("View your stats"),
 
   new SlashCommandBuilder()
     .setName("leaderboard")
@@ -143,7 +118,7 @@ const commands = [
     .setDescription("Admin: give spins")
     .addUserOption(opt =>
       opt.setName("user")
-        .setDescription("User")
+        .setDescription("Target user")
         .setRequired(true)
     )
     .addIntegerOption(opt =>
@@ -154,63 +129,60 @@ const commands = [
 ].map(c => c.toJSON());
 
 // =====================
-// 🚀 REGISTER COMMANDS
+// 🚀 REGISTER COMMANDS (AFTER READY)
 // =====================
-const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
-
-await rest.put(
-  Routes.applicationCommands(process.env.CLIENT_ID),
-  { body: commands }
-);
-
-// =====================
-// 🤖 READY
-// =====================
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-});
 
-// =====================
-// 💬 ANTI SPAM MESSAGE TRACKER
-// =====================
-client.on("messageCreate", (msg) => {
-  if (msg.author.bot) return;
+  try {
+    const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
-  const id = msg.author.id;
-  const now = Date.now();
+    await rest.put(
+      Routes.applicationGuildCommands(
+        process.env.CLIENT_ID,
+        process.env.GUILD_ID
+      ),
+      { body: commands }
+    );
 
-  const last = messageCooldown.get(id) || 0;
-  if (now - last < 15000) return;
-
-  messageCooldown.set(id, now);
-
-  db.prepare(`
-    INSERT INTO users (discord_id, messages, spins)
-    VALUES (?, 1, 0)
-    ON CONFLICT(discord_id)
-    DO UPDATE SET messages = messages + 1
-  `).run(id);
+    console.log("✅ Slash commands registered instantly");
+  } catch (err) {
+    console.error("❌ Failed to register commands:", err);
+  }
 });
 
 // =====================
 // 🎮 COMMAND HANDLER
 // =====================
 client.on("interactionCreate", async (i) => {
+  if (!i.isChatInputCommand()) return;
+
+  const id = i.user.id;
+
+  let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+    .get(id);
+
+  if (!user) {
+    db.prepare(`
+      INSERT INTO users (discord_id, spins, streak, last_daily)
+      VALUES (?, 0, 0, 0)
+    `).run(id);
+
+    user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+      .get(id);
+  }
 
   // =====================
   // 🔐 VERIFY
   // =====================
   if (i.commandName === "verify") {
     const username = i.options.getString("username");
-    const code = Math.floor(10000 + Math.random() * 90000);
 
-    pendingLinks.set(i.user.id, {
-      mc_username: username,
-      code,
-      expires: Date.now() + 120000
-    });
+    db.prepare(`
+      UPDATE users SET mc_username = ? WHERE discord_id = ?
+    `).run(username, id);
 
-    return i.reply(`🔐 Run in Minecraft:\n/say VERIFY ${code}`);
+    return i.reply(`✅ Linked to ${username}`);
   }
 
   // =====================
@@ -218,45 +190,27 @@ client.on("interactionCreate", async (i) => {
   // =====================
   if (i.commandName === "roll") {
 
-    const user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(i.user.id);
-
-    if (!user?.mc_username)
-      return i.reply("❌ Not linked");
+    if (!user.mc_username)
+      return i.reply("❌ Use /verify first");
 
     if ((user.spins || 0) <= 0)
       return i.reply("❌ No spins");
 
     db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
-      .run(i.user.id);
+      .run(id);
 
-    const mult = luckMultiplier();
+    const cmd = getReward(config.reward.pool)
+      .replace("{player}", user.mc_username);
 
-    const cmd = getReward(config.reward.pool, mult)
-      ?.replace("{player}", user.mc_username);
+    await safeSend(cmd);
 
-    await safeSend(cmd, i.user.id);
-
-    return i.reply("🎰 Rolled reward!");
+    return i.reply("🎰 You rolled a reward!");
   }
 
   // =====================
   // 🎁 DAILY
   // =====================
   if (i.commandName === "daily") {
-
-    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(i.user.id);
-
-    if (!user) {
-      db.prepare(`
-        INSERT INTO users (discord_id, spins, streak, last_daily)
-        VALUES (?, 0, 0, 0)
-      `).run(i.user.id);
-
-      user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-        .get(i.user.id);
-    }
 
     const now = Date.now();
     const day = 86400000;
@@ -269,15 +223,13 @@ client.on("interactionCreate", async (i) => {
 
     streak++;
 
-    const reward =
-      config.daily.baseSpins +
-      streak * config.daily.streakBonus;
+    const reward = config.daily.baseSpins + streak * config.daily.streakBonus;
 
     db.prepare(`
       UPDATE users
       SET spins = spins + ?, streak = ?, last_daily = ?
       WHERE discord_id = ?
-    `).run(reward, streak, now, i.user.id);
+    `).run(reward, streak, now, id);
 
     return i.reply(`🎁 +${reward} spins | 🔥 ${streak}`);
   }
@@ -286,12 +238,7 @@ client.on("interactionCreate", async (i) => {
   // 📊 STATS
   // =====================
   if (i.commandName === "stats") {
-    const u = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(i.user.id);
-
-    return i.reply(
-      `🎰 Spins: ${u?.spins || 0}\n🔥 Streak: ${u?.streak || 0}`
-    );
+    return i.reply(`🎰 Spins: ${user.spins}\n🔥 Streak: ${user.streak}`);
   }
 
   // =====================
@@ -303,12 +250,12 @@ client.on("interactionCreate", async (i) => {
     `).all();
 
     return i.reply(
-      rows.map((r, x) => `#${x + 1} ${r.mc_username} - ${r.spins}`).join("\n")
+      rows.map((r, i) => `#${i + 1} ${r.mc_username} - ${r.spins}`).join("\n")
     );
   }
 
   // =====================
-  // 🛠️ GIVESPINS
+  // 🛠️ ADMIN
   // =====================
   if (i.commandName === "givespins") {
 
@@ -318,11 +265,10 @@ client.on("interactionCreate", async (i) => {
     const u = i.options.getUser("user");
     const a = i.options.getInteger("amount");
 
-    db.prepare(`
-      UPDATE users SET spins = spins + ? WHERE discord_id = ?
-    `).run(a, u.id);
+    db.prepare("UPDATE users SET spins = spins + ? WHERE discord_id = ?")
+      .run(a, u.id);
 
-    return i.reply(`🎰 +${a} spins given`);
+    return i.reply(`🎰 Gave ${a} spins`);
   }
 });
 
