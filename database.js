@@ -1,17 +1,22 @@
-import Database from "better-sqlite3";
+import pg from "pg";
+const { Pool } = pg;
 
-const db = new Database(process.env.DATABASE_PATH || "./data.db");
+export const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-db.prepare(`
+// CREATE TABLE (safe, runs every deploy but does NOT reset data)
+await pool.query(`
 CREATE TABLE IF NOT EXISTS users (
   discord_id TEXT PRIMARY KEY,
-  mc_username TEXT DEFAULT NULL,
-  spins INTEGER DEFAULT 0,
-  messages INTEGER DEFAULT 0,
+  mc_username TEXT,
+  spins INT DEFAULT 0,
+  messages INT DEFAULT 0,
   luck_multi REAL DEFAULT 1,
-  last_message INTEGER DEFAULT 0,
-  last_daily INTEGER DEFAULT 0
+  last_daily BIGINT DEFAULT 0,
+  last_message BIGINT DEFAULT 0
 )
-`).run();
+`);
 
-export default db;
+export default pool;
