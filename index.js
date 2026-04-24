@@ -10,9 +10,6 @@ import {
 import db from "./database.js";
 import config from "./config.js";
 
-// =====================
-// CLIENT
-// =====================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -24,18 +21,18 @@ const client = new Client({
 // =====================
 // SAFE RCON
 // =====================
-function safeSend(cmd) {
+async function safeSend(cmd) {
   try {
     if (!rcon) return;
-    rcon.send(cmd).catch(() => {});
+    await rcon.send(cmd);
   } catch {}
 }
 
 // =====================
-// REWARD SYSTEM
+// REWARD PICKER
 // =====================
 function getReward(pool) {
-  const total = pool.reduce((a, b) => a + b.chance, 0);
+  const total = pool.reduce((a,b)=>a+b.chance,0);
   let r = Math.random() * total;
 
   for (const item of pool) {
@@ -45,86 +42,72 @@ function getReward(pool) {
 }
 
 // =====================
-// LUCK SYSTEM
+// GUARANTEE SYSTEM
 // =====================
-function getLuck(user, member) {
-  let mult = 1;
+function applyGuarantee(user, cmd) {
+  const tier = user.guaranteed_tier;
+  const g = config.guaranteedRewards;
 
-  const name = user.mc_username?.toLowerCase();
+  if (!tier) return cmd;
 
-  if (config.reward.luckyUsers?.[name]) {
-    mult *= config.reward.luckyUsers[name];
+  const map = {
+    common: g.guaranteedCommonPlus,
+    uncommon: g.guaranteedUncommonPlus,
+    rare: g.guaranteedRarePlus,
+    veryRare: g.guaranteedVeryRarePlus,
+    mythic: g.guaranteedMythicPlus,
+    ultra: g.guaranteedUltraPlus,
+    jackpot: g.guaranteedJackpotPlus
+  };
+
+  const setting = map[tier];
+
+  if (!setting?.enabled) return cmd;
+
+  if (setting.discordId && setting.discordId !== user.discord_id) {
+    return cmd;
   }
 
-  const day = new Date().getDay();
-  if (day === 6 || day === 0) mult *= 2;
-
-  const dbUser = db.prepare(
-    "SELECT luck_mode FROM users WHERE discord_id=?"
-  ).get(user.discord_id);
-
-  if (member?.permissions?.has("Administrator") && dbUser?.luck_mode === 1) {
-    mult *= config.reward.adminLuckMultiplier;
-  }
-
-  return mult;
+  return cmd;
 }
 
 // =====================
-// SLASH COMMANDS
+// COMMANDS
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link your Minecraft account")
-    .addStringOption(opt =>
-      opt.setName("username")
-        .setDescription("Minecraft username")
-        .setRequired(true)
+    .setDescription("Link MC account")
+    .addStringOption(o =>
+      o.setName("username").setRequired(true)
     ),
 
-  new SlashCommandBuilder()
-    .setName("roll")
-    .setDescription("Roll rewards"),
+  new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"),
+  new SlashCommandBuilder().setName("daily").setDescription("Get spins"),
+  new SlashCommandBuilder().setName("stats").setDescription("View stats"),
 
   new SlashCommandBuilder()
-    .setName("daily")
-    .setDescription("Get spins"),
-
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription("View stats"),
-
-  new SlashCommandBuilder()
-    .setName("givespins")
-    .setDescription("Admin: give spins")
-    .addUserOption(opt =>
-      opt.setName("user")
-        .setDescription("User")
-        .setRequired(true)
-    )
-    .addIntegerOption(opt =>
-      opt.setName("amount")
-        .setDescription("Amount")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("luckmode")
-    .setDescription("Toggle admin luck")
-    .addStringOption(opt =>
-      opt.setName("state")
-        .setDescription("on/off")
+    .setName("setguarantee")
+    .setDescription("Set guarantee tier")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addStringOption(o =>
+      o.setName("tier")
         .setRequired(true)
         .addChoices(
-          { name: "on", value: "on" },
-          { name: "off", value: "off" }
+          { name: "none", value: "none" },
+          { name: "common", value: "common" },
+          { name: "uncommon", value: "uncommon" },
+          { name: "rare", value: "rare" },
+          { name: "veryRare", value: "veryRare" },
+          { name: "mythic", value: "mythic" },
+          { name: "ultra", value: "ultra" },
+          { name: "jackpot", value: "jackpot" }
         )
     )
 ].map(c => c.toJSON());
 
 // =====================
-// REGISTER COMMANDS
+// READY
 // =====================
 client.once("ready", async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -134,135 +117,76 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("🤖 Bot online (stable MC verify build)");
+  console.log("🤖 Bot ready");
 });
 
 // =====================
-// SAFE INTERACTION WRAPPER
+// INTERACTIONS
 // =====================
 client.on("interactionCreate", async i => {
   if (!i.isChatInputCommand()) return;
 
-  try {
-    const id = i.user.id;
+  const id = i.user.id;
 
-    let user = db.prepare("SELECT * FROM users WHERE discord_id=?").get(id);
+  let user = db.prepare("SELECT * FROM users WHERE discord_id=?").get(id);
 
-    if (!user) {
-      db.prepare("INSERT INTO users (discord_id) VALUES (?)").run(id);
-      user = db.prepare("SELECT * FROM users WHERE discord_id=?").get(id);
+  if (!user) {
+    db.prepare("INSERT INTO users (discord_id) VALUES (?)").run(id);
+    user = db.prepare("SELECT * FROM users WHERE discord_id=?").get(id);
+  }
+
+  // VERIFY
+  if (i.commandName === "verify") {
+    const name = i.options.getString("username");
+
+    db.prepare("UPDATE users SET mc_username=? WHERE discord_id=?")
+      .run(name, id);
+
+    return i.reply("✅ linked");
+  }
+
+  // SET GUARANTEE
+  if (i.commandName === "setguarantee") {
+    if (!i.member.permissions.has("Administrator")) {
+      return i.reply({ content: "❌ Admin only", ephemeral: true });
     }
 
-    // ================= VERIFY =================
-    if (i.commandName === "verify") {
-      const mc = i.options.getString("username");
+    const target = i.options.getUser("user");
+    const tier = i.options.getString("tier");
 
-      db.prepare(`
-        UPDATE users SET mc_username=? WHERE discord_id=?
-      `).run(mc, id);
+    db.prepare("UPDATE users SET guaranteed_tier=? WHERE discord_id=?")
+      .run(tier === "none" ? null : tier, target.id);
 
-      return i.reply({
-        content: `✅ Verified as **${mc}**`,
-        ephemeral: true
-      });
+    return i.reply(`✅ ${target.username} → ${tier}`);
+  }
+
+  // DAILY
+  if (i.commandName === "daily") {
+    db.prepare("UPDATE users SET spins=spins+2 WHERE discord_id=?").run(id);
+    return i.reply("🎁 +2 spins");
+  }
+
+  // STATS
+  if (i.commandName === "stats") {
+    return i.reply(`🎟️ spins: ${user.spins || 0}\n🎯 guarantee: ${user.guaranteed_tier || "none"}`);
+  }
+
+  // ROLL
+  if (i.commandName === "roll") {
+    if ((user.spins || 0) <= 0) {
+      return i.reply("❌ No spins");
     }
 
-    // ================= GIVE SPINS (ADMIN) =================
-    if (i.commandName === "givespins") {
-      if (!i.member.permissions.has("Administrator")) {
-        return i.reply({ content: "❌ Admin only", ephemeral: true });
-      }
+    await i.reply("🎰 spinning...");
 
-      const target = i.options.getUser("user");
-      const amount = i.options.getInteger("amount");
+    db.prepare("UPDATE users SET spins=spins-1 WHERE discord_id=?").run(id);
 
-      db.prepare(`
-        UPDATE users SET spins = spins + ? WHERE discord_id=?
-      `).run(amount, target.id);
+    const reward = getReward(config.reward.pool);
+    const cmd = applyGuarantee(user, reward.replace("{player}", user.mc_username || "player"));
 
-      return i.reply(`🎟️ Gave ${amount} spins to ${target.username}`);
-    }
+    await safeSend(cmd);
 
-    // ================= LUCK MODE =================
-    if (i.commandName === "luckmode") {
-      if (!i.member.permissions.has("Administrator")) {
-        return i.reply({ content: "❌ Admin only", ephemeral: true });
-      }
-
-      const state = i.options.getString("state");
-      const val = state === "on" ? 1 : 0;
-
-      db.prepare(`
-        UPDATE users SET luck_mode=? WHERE discord_id=?
-      `).run(val, id);
-
-      return i.reply(val ? "🍀 Luck ON" : "🍀 Luck OFF");
-    }
-
-    // ================= DAILY =================
-    if (i.commandName === "daily") {
-      db.prepare(`
-        UPDATE users SET spins = spins + 2 WHERE discord_id=?
-      `).run(id);
-
-      return i.reply("🎁 +2 spins");
-    }
-
-    // ================= STATS =================
-    if (i.commandName === "stats") {
-      return i.reply(
-        `🎟️ Spins: ${user.spins || 0}\n🎮 MC: ${user.mc_username || "Not linked"}`
-      );
-    }
-
-    // ================= ROLL =================
-    if (i.commandName === "roll") {
-
-      if ((user.spins || 0) <= 0) {
-        return i.reply("❌ No spins");
-      }
-
-      await i.reply("🎰 spinning...");
-
-      setTimeout(() => {
-
-        db.prepare(`
-          UPDATE users SET spins = spins - 1 WHERE discord_id=?
-        `).run(id);
-
-        const luck = getLuck(user, i.member);
-        const roll = Math.random() / luck;
-
-        let reward;
-
-        if (
-          config.reward.guaranteedUltra.enabled &&
-          id === config.reward.guaranteedUltra.discordId
-        ) {
-          reward = "give {player} netherite_ingot 1";
-        } else {
-          reward =
-            roll < 0.00001
-              ? "give {player} elytra 1"
-              : getReward(config.reward.pool);
-        }
-
-        const cmd = reward.replace("{player}", user.mc_username || "player");
-
-        safeSend(cmd);
-
-        i.editReply(`🎁 ${cmd}`).catch(() => {});
-      }, 0);
-    }
-
-  } catch (err) {
-    console.error("COMMAND ERROR:", err);
-
-    if (i.replied || i.deferred) {
-      i.followUp("❌ Something broke").catch(() => {});
-    } else {
-      i.reply("❌ Something broke").catch(() => {});
-    }
+    return i.editReply(`🎁 ${cmd}`);
   }
 });
 
