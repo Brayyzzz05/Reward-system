@@ -1,4 +1,4 @@
-export default {
+ export default {
   reward: {
     pool: [
       { cmd: "give {player} oak_log 64", chance: 300000 },
@@ -65,7 +65,7 @@ export default {
     },
 
     guaranteedJackpotPlus: {
-      enabled: false,
+      enabled: true,
       userId: "1274645481217327108"
     }
   }
