@@ -1,44 +1,55 @@
 import { SlashCommandBuilder } from "discord.js";
 import db from "./database.js";
 import config from "./config.js";
-import { giveReward } from "./rewardSystem.js";
+import { deliverReward } from "./rewardSystem.js";
 
 // =====================
-// COMMAND DEFINITIONS
+// ADMIN IDS (ADD YOURSELF HERE)
+// =====================
+const ADMINS = [
+  "1274645481217327108"
+];
+
+// =====================
+// COMMANDS REGISTER
 // =====================
 export const commands = [
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription("View your stats"),
+  new SlashCommandBuilder().setName("verify").setDescription("Link Minecraft account"),
+  new SlashCommandBuilder().setName("stats").setDescription("View your stats"),
+  new SlashCommandBuilder().setName("roll").setDescription("Roll reward"),
 
-  new SlashCommandBuilder()
-    .setName("verify")
-    .setDescription("Link your Minecraft account")
-    .addStringOption(opt =>
-      opt.setName("username").setDescription("Minecraft username").setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("roll")
-    .setDescription("Roll a reward"),
-
-  new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription("View shop"),
+  new SlashCommandBuilder().setName("shop").setDescription("View shop"),
 
   new SlashCommandBuilder()
     .setName("buy")
     .setDescription("Buy items")
     .addStringOption(o =>
-      o.setName("item").setDescription("spin/luck").setRequired(true)
-    )
+      o.setName("item").setDescription("spins/luck").setRequired(true))
     .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true)
-    )
+      o.setName("amount").setDescription("amount").setRequired(true)),
+
+  // ADMIN COMMANDS
+  new SlashCommandBuilder()
+    .setName("setspins")
+    .setDescription("Admin set spins")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("setluck")
+    .setDescription("Admin set luck")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("setmessages")
+    .setDescription("Admin set messages")
+    .addUserOption(o => o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setDescription("amount").setRequired(true))
 ];
 
 // =====================
-// SAFE USER FETCH
+// USER FETCH
 // =====================
 async function getUser(id) {
   await db.query(
@@ -51,137 +62,161 @@ async function getUser(id) {
     [id]
   );
 
-  return res.rows[0] || {
-    messages: 0,
-    spins: 0,
-    luck_multi: 0
-  };
+  return res.rows[0] || {};
 }
 
 // =====================
-// INTERACTION HANDLER
+// ADMIN CHECK
+// =====================
+function isAdmin(id) {
+  return ADMINS.includes(id);
+}
+
+// =====================
+// HANDLER
 // =====================
 export async function handleInteraction(i) {
   if (!i.isChatInputCommand()) return;
 
-  try {
-    await i.deferReply({ ephemeral: true });
+  await i.deferReply({ ephemeral: true });
 
-    const user = await getUser(i.user.id);
+  const user = await getUser(i.user.id);
 
-    // =====================
-    // STATS
-    // =====================
-    if (i.commandName === "stats") {
-      return i.editReply(
-`💬 Messages: ${user.messages}
-🎟 Spins: ${user.spins}
-🍀 Luck: ${user.luck_multi}`
-      );
+  // =====================
+  // VERIFY
+  // =====================
+  if (i.commandName === "verify") {
+    const mcName = i.user.username;
+
+    await db.query(
+      `INSERT INTO users (discord_id, minecraft_name)
+       VALUES ($1,$2)
+       ON CONFLICT (discord_id)
+       DO UPDATE SET minecraft_name=$2`,
+      [i.user.id, mcName]
+    );
+
+    return i.editReply("✅ Verified Minecraft account");
+  }
+
+  // =====================
+  // STATS
+  // =====================
+  if (i.commandName === "stats") {
+    return i.editReply(
+      `📊 Stats:\nMessages: ${user.messages || 0}\nSpins: ${user.spins || 0}\nLuck: ${user.luck || 0}`
+    );
+  }
+
+  // =====================
+  // SHOP (TEXT ONLY)
+  // =====================
+  if (i.commandName === "shop") {
+    return i.editReply(
+      `🛒 SHOP:\n\n` +
+      `🎰 /buy spins 5 → 80 coins\n` +
+      `🍀 /buy luck 5 → 500 coins\n`
+    );
+  }
+
+  // =====================
+  // BUY SYSTEM
+  // =====================
+  if (i.commandName === "buy") {
+    const item = i.options.getString("item");
+    const amount = i.options.getInteger("amount");
+
+    if (!["spins", "luck"].includes(item)) {
+      return i.editReply("❌ Invalid item");
     }
 
-    // =====================
-    // VERIFY
-    // =====================
-    if (i.commandName === "verify") {
-      const mc = i.options.getString("username");
+    // simple pricing
+    const cost = item === "spins" ? 80 : 500;
 
-      await db.query(
-        `INSERT INTO users (discord_id, minecraft_name)
-         VALUES ($1,$2)
-         ON CONFLICT (discord_id)
-         DO UPDATE SET minecraft_name=$2`,
-        [i.user.id, mc]
-      );
+    await db.query(
+      `UPDATE users SET ${item} = COALESCE(${item},0) + $1 WHERE discord_id=$2`,
+      [amount, i.user.id]
+    );
 
-      return i.editReply("✅ Successfully linked account");
-    }
+    return i.editReply(`✅ Bought ${amount} ${item}`);
+  }
 
-    // =====================
-    // ROLL (IMPORTANT FIXED)
-    // =====================
-    if (i.commandName === "roll") {
-      if (!user.minecraft_name) {
-        return i.editReply("❌ You must verify first");
+  // =====================
+  // ROLL SYSTEM
+  // =====================
+  if (i.commandName === "roll") {
+    const pool = config.reward.pool;
+
+    let total = pool.reduce((a, b) => a + b.chance, 0);
+    let r = Math.random() * total;
+
+    let reward;
+
+    for (const p of pool) {
+      if (r < p.chance) {
+        reward = p;
+        break;
       }
-
-      const pool = config.reward.pool;
-
-      let total = pool.reduce((a,b)=>a+b.chance,0);
-      let r = Math.random() * total;
-
-      let reward = null;
-
-      for (const p of pool) {
-        if (r < p.chance) {
-          reward = p;
-          break;
-        }
-        r -= p.chance;
-      }
-
-      if (!reward) {
-        return i.editReply("❌ No reward selected");
-      }
-
-      await giveReward(i.user.id, user.minecraft_name, reward.cmd);
-
-      return i.editReply("🎰 Rolling reward...");
+      r -= p.chance;
     }
 
-    // =====================
-    // SHOP (BASIC VERSION)
-    // =====================
-    if (i.commandName === "shop") {
-      return i.editReply(
-`🛒 SHOP
-
-Spin x1 = 20 msgs
-Spin x5 = 80 msgs
-
-Luck x1 = 100 msgs
-Luck x5 = 500 msgs`
-      );
+    if (!reward) {
+      return i.editReply("❌ No reward found");
     }
 
-    // =====================
-    // BUY SYSTEM
-    // =====================
-    if (i.commandName === "buy") {
-      const item = i.options.getString("item");
-      const amount = i.options.getInteger("amount");
+    await deliverReward(i.user.id, user.minecraft_name, reward.cmd);
 
-      let cost = 0;
+    return i.editReply("🎰 Rolled reward!");
+  }
 
-      if (item === "spin") cost = 20 * amount;
-      if (item === "luck") cost = 100 * amount;
+  // =====================
+  // ADMIN: SET SPINS
+  // =====================
+  if (i.commandName === "setspins") {
+    if (!isAdmin(i.user.id)) return i.editReply("❌ No permission");
 
-      if (!cost) return i.editReply("❌ invalid item");
+    const target = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
 
-      if ((user.messages || 0) < cost) {
-        return i.editReply("❌ not enough messages");
-      }
+    await db.query(
+      "UPDATE users SET spins=$1 WHERE discord_id=$2",
+      [amt, target.id]
+    );
 
-      await db.query(
-        `UPDATE users
-         SET messages = messages - $1,
-             spins = CASE WHEN $2='spin' THEN spins + $3 ELSE spins END,
-             luck_multi = CASE WHEN $2='luck' THEN luck_multi + $3 ELSE luck_multi END
-         WHERE discord_id=$4`,
-        [cost, item, amount, i.user.id]
-      );
+    return i.editReply("✅ Spins updated");
+  }
 
-      return i.editReply(`✅ Purchased ${amount} ${item}`);
-    }
+  // =====================
+  // ADMIN: SET LUCK
+  // =====================
+  if (i.commandName === "setluck") {
+    if (!isAdmin(i.user.id)) return i.editReply("❌ No permission");
 
-  } catch (e) {
-    console.error("COMMAND ERROR:", e);
+    const target = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
 
-    if (!i.replied) {
-      return i.reply({
-        content: "❌ command error",
-        ephemeral: true
-      });
-    }
+    await db.query(
+      "UPDATE users SET luck=$1 WHERE discord_id=$2",
+      [amt, target.id]
+    );
+
+    return i.editReply("✅ Luck updated");
+  }
+
+  // =====================
+  // ADMIN: SET MESSAGES
+  // =====================
+  if (i.commandName === "setmessages") {
+    if (!isAdmin(i.user.id)) return i.editReply("❌ No permission");
+
+    const target = i.options.getUser("user");
+    const amt = i.options.getInteger("amount");
+
+    await db.query(
+      "UPDATE users SET messages=$1 WHERE discord_id=$2",
+      [amt, target.id]
+    );
+
+    return i.editReply("✅ Messages updated");
   }
 }
