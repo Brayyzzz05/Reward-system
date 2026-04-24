@@ -51,12 +51,16 @@ async function getUser(id) {
     ON CONFLICT (discord_id) DO NOTHING
   `, [id]);
 
-  const r = await db("SELECT * FROM users WHERE discord_id=$1", [id]);
+  const r = await db(
+    "SELECT * FROM users WHERE discord_id=$1",
+    [id]
+  );
+
   return r.rows[0];
 }
 
 // =====================
-// MESSAGE TRACKER (CURRENCY)
+// MESSAGE TRACKER
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -84,7 +88,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("daily")
-    .setDescription("Daily reward"),
+    .setDescription("Claim daily rewards"),
 
   new SlashCommandBuilder()
     .setName("odds")
@@ -131,18 +135,23 @@ const commands = [
     .addNumberOption(o =>
       o.setName("amount").setDescription("amount").setRequired(true)),
 
+  // =====================
+  // UPDATED GUARANTEE COMMAND
+  // =====================
   new SlashCommandBuilder()
-    .setName("setguarantee")
-    .setDescription("Admin set rarity guarantee")
+    .setName("rarityset")
+    .setDescription("Admin: set rarity guarantee")
     .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
+      o.setName("user")
+        .setDescription("target user")
+        .setRequired(true))
     .addStringOption(o =>
       o.setName("rarity")
         .setDescription("common rare epic legendary jackpot")
         .setRequired(true))
     .addBooleanOption(o =>
       o.setName("state")
-        .setDescription("true or false")
+        .setDescription("true / false")
         .setRequired(true))
 
 ].map(c => c.toJSON());
@@ -231,7 +240,7 @@ Use /buy item amount`
     }
 
     // =====================
-    // BUY SYSTEM
+    // BUY
     // =====================
     if (i.commandName === "buy") {
       const item = i.options.getString("item");
@@ -289,7 +298,7 @@ Use /buy item amount`
     }
 
     // =====================
-    // ROLL + GUARANTEE
+    // ROLL
     // =====================
     if (i.commandName === "roll") {
 
@@ -325,30 +334,24 @@ Use /buy item amount`
         }
       }
 
-      const frames = ["🎰","🎲","🎯","✨","💥","🎉"];
-
       await i.reply("🎰 spinning...");
-
-      for (const f of frames) {
-        await new Promise(r => setTimeout(r, 350));
-        await i.editReply(`${f} spinning...`);
-      }
+      await new Promise(r => setTimeout(r, 1200));
 
       return i.editReply(`🎉 ${result.cmd}`);
     }
 
     // =====================
-    // ADMIN ONLY
+    // ADMIN CHECK
     // =====================
     if (!isAdmin &&
-      ["setspins","setmessages","setluck","setguarantee"].includes(i.commandName)) {
+      ["setspins","setmessages","setluck","rarityset"].includes(i.commandName)) {
       return reply(i, "❌ admin only");
     }
 
     // =====================
-    // SET GUARANTEE
+    // RARITY SET (UPDATED)
     // =====================
-    if (i.commandName === "setguarantee") {
+    if (i.commandName === "rarityset") {
 
       const target = i.options.getUser("user").id;
       const rarity = i.options.getString("rarity").toLowerCase();
@@ -356,8 +359,9 @@ Use /buy item amount`
 
       const valid = ["common","rare","epic","legendary","jackpot"];
 
-      if (!valid.includes(rarity))
+      if (!valid.includes(rarity)) {
         return i.reply({ content: "❌ invalid rarity", ephemeral: true });
+      }
 
       if (!state) {
         guaranteeMap.delete(target);
@@ -367,7 +371,7 @@ Use /buy item amount`
       guaranteeMap.set(target, { rarity, active: true });
 
       return i.reply({
-        content: `🎯 guaranteed: ${rarity}`,
+        content: `🎯 set: ${rarity}`,
         ephemeral: true
       });
     }
@@ -397,7 +401,7 @@ Use /buy item amount`
     }
 
   } catch (e) {
-    console.error(e);
+    console.error("ERROR:", e);
   }
 });
 
