@@ -4,9 +4,9 @@ let rcon = null;
 let connected = false;
 
 // =====================
-// BACKOFF STATE
+// SMART BACKOFF STATE
 // =====================
-let retryDelay = 5000; // start at 5s
+let retryDelay = 5000; // start 5s
 const MAX_DELAY = 60000; // max 60s
 
 // =====================
@@ -14,7 +14,7 @@ const MAX_DELAY = 60000; // max 60s
 // =====================
 export async function connectRcon() {
   try {
-    console.log("🔄 Trying RCON connection...");
+    console.log("🔄 Attempting RCON connection...");
 
     rcon = await Rcon.Rcon.connect({
       host: process.env.RCON_HOST,
@@ -22,8 +22,11 @@ export async function connectRcon() {
       password: process.env.RCON_PASSWORD
     });
 
+    // REAL CONNECTION TEST (IMPORTANT)
+    await rcon.send("list");
+
     connected = true;
-    retryDelay = 5000; // reset backoff on success
+    retryDelay = 5000; // reset backoff
 
     console.log("🎮 RCON connected successfully");
   } catch (err) {
@@ -31,9 +34,9 @@ export async function connectRcon() {
 
     console.log(`⚠️ RCON offline. Retrying in ${retryDelay / 1000}s`);
 
-    // exponential backoff
     setTimeout(connectRcon, retryDelay);
 
+    // exponential backoff
     retryDelay = Math.min(retryDelay * 2, MAX_DELAY);
   }
 }
@@ -42,21 +45,48 @@ export async function connectRcon() {
 // SAFE COMMAND EXECUTION
 // =====================
 export async function runCommand(cmd) {
-  if (!connected || !rcon) {
+  if (!rcon || !connected) {
     throw new Error("RCON_NOT_CONNECTED");
   }
 
-  return await rcon.send(cmd);
+  try {
+    return await rcon.send(cmd);
+  } catch (err) {
+    console.log("⚠️ RCON dropped during command");
+
+    connected = false;
+
+    setTimeout(connectRcon, 3000);
+
+    throw err;
+  }
 }
 
 // =====================
-// STATUS
+// STATUS CHECK
 // =====================
 export function isRconOnline() {
   return connected;
 }
 
 // =====================
-// AUTO START (IMPORTANT)
+// HEARTBEAT (PREVENT FAKE CONNECTION)
+// =====================
+setInterval(async () => {
+  if (!connected || !rcon) return;
+
+  try {
+    await rcon.send("list");
+  } catch (err) {
+    console.log("💔 RCON heartbeat failed — reconnecting");
+
+    connected = false;
+
+    setTimeout(connectRcon, 3000);
+  }
+}, 15000);
+
+// =====================
+// AUTO START
 // =====================
 connectRcon();
