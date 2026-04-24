@@ -76,25 +76,37 @@ const commands = [
     .setName("verify")
     .setDescription("Link MC account")
     .addStringOption(o =>
-      o.setName("username").setDescription("Minecraft username").setRequired(true)
+      o.setName("username")
+        .setDescription("Minecraft username")
+        .setRequired(true)
     ),
 
-  new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"),
+  new SlashCommandBuilder()
+    .setName("roll")
+    .setDescription("Spin rewards"),
 
-  new SlashCommandBuilder().setName("daily").setDescription("Get spins"),
+  new SlashCommandBuilder()
+    .setName("daily")
+    .setDescription("Get spins"),
 
-  new SlashCommandBuilder().setName("stats").setDescription("View stats"),
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("View stats"),
 
-  new SlashCommandBuilder().setName("shop").setDescription("Open shop"),
+  new SlashCommandBuilder()
+    .setName("shop")
+    .setDescription("Open shop"),
 
-  new SlashCommandBuilder().setName("odds").setDescription("View drop chances"),
+  new SlashCommandBuilder()
+    .setName("odds")
+    .setDescription("View drop chances"),
 
   new SlashCommandBuilder()
     .setName("buy")
     .setDescription("Buy items")
     .addStringOption(o =>
       o.setName("item")
-        .setDescription("item")
+        .setDescription("Item to buy")
         .setRequired(true)
         .addChoices(
           { name: "Luck x1.5 (100)", value: "luck1" },
@@ -105,21 +117,37 @@ const commands = [
     )
     .addIntegerOption(o =>
       o.setName("amount")
-        .setDescription("how many")
+        .setDescription("How many to buy")
         .setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName("setspins")
-    .setDescription("Set spins")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+    .setDescription("Set spins (admin)")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("User to set spins for")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount of spins")
+        .setRequired(true)
+    ),
 
   new SlashCommandBuilder()
     .setName("setmessages")
-    .setDescription("Set messages")
-    .addUserOption(o => o.setName("user").setRequired(true))
-    .addIntegerOption(o => o.setName("amount").setRequired(true))
+    .setDescription("Set messages (admin)")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("User to set messages for")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount of messages")
+        .setRequired(true)
+    )
 
 ].map(c => c.toJSON());
 
@@ -134,7 +162,7 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("🤖 READY FINAL SHOP BUILD");
+  console.log("🤖 BOT READY (FIXED)");
 });
 
 // =====================
@@ -142,11 +170,8 @@ client.once("ready", async () => {
 // =====================
 client.on("interactionCreate", async i => {
 
-  // =====================
   // BUTTON SHOP
-  // =====================
   if (i.isButton()) {
-
     const id = i.user.id;
 
     db.prepare("INSERT OR IGNORE INTO users (discord_id) VALUES (?)").run(id);
@@ -174,9 +199,6 @@ client.on("interactionCreate", async i => {
     return i.reply({ content: "✅ Purchased", ephemeral: true });
   }
 
-  // =====================
-  // SLASH COMMANDS
-  // =====================
   if (!i.isChatInputCommand()) return;
 
   const id = i.user.id;
@@ -191,9 +213,8 @@ client.on("interactionCreate", async i => {
     return i.reply("✅ linked");
   }
 
-  // SHOP (INTERACTIVE)
+  // SHOP
   if (i.commandName === "shop") {
-
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId("luck1").setLabel("Luck x1.5 (100)").setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId("luck2").setLabel("Luck x2 (250)").setStyle(ButtonStyle.Primary),
@@ -201,13 +222,10 @@ client.on("interactionCreate", async i => {
       new ButtonBuilder().setCustomId("spin1").setLabel("+1 Spin (20)").setStyle(ButtonStyle.Success)
     );
 
-    return i.reply({
-      content: "🛒 Click to buy:",
-      components: [row]
-    });
+    return i.reply({ content: "🛒 Shop:", components: [row] });
   }
 
-  // MASS BUY
+  // BUY (MASS)
   if (i.commandName === "buy") {
     const item = i.options.getString("item");
     const amount = i.options.getInteger("amount") || 1;
@@ -231,14 +249,40 @@ client.on("interactionCreate", async i => {
           luck_multi=luck_multi+?,
           spins=spins+?
       WHERE discord_id=?
-    `).run(
-      totalCost,
-      luckGain * amount,
-      spinsGain * amount,
-      id
-    );
+    `).run(totalCost, luckGain * amount, spinsGain * amount, id);
 
     return i.reply(`✅ Bought x${amount}`);
+  }
+
+  // ODDS
+  if (i.commandName === "odds") {
+    const pool = applyGuarantee(config.reward.pool);
+    const luck = user.luck_multi || 1;
+
+    const adjusted = pool.map(item => ({
+      ...item,
+      chance: item.chance * luck
+    }));
+
+    const total = adjusted.reduce((a,b)=>a+b.chance,0);
+
+    const grouped = {};
+
+    for (const item of adjusted) {
+      const rarity = getRarity(item.chance);
+      const percent = ((item.chance / total) * 100).toFixed(4);
+
+      if (!grouped[rarity]) grouped[rarity] = [];
+      grouped[rarity].push(`${item.cmd.replace("give {player} ", "")} → ${percent}%`);
+    }
+
+    let output = `📊 Odds (Luck x${luck}):\n\n`;
+
+    for (const r in grouped) {
+      output += `${r}\n${grouped[r].join("\n")}\n\n`;
+    }
+
+    return i.reply(output);
   }
 
   // ROLL (ANIMATED)
@@ -280,6 +324,37 @@ client.on("interactionCreate", async i => {
 💬 Messages: ${user.messages}`
     );
   }
+
+  // SET SPINS
+  if (i.commandName === "setspins") {
+    if (!i.member.permissions.has("Administrator"))
+      return i.reply({ content: "❌ Admin only", ephemeral: true });
+
+    const target = i.options.getUser("user");
+    const amount = i.options.getInteger("amount");
+
+    db.prepare("INSERT OR IGNORE INTO users (discord_id) VALUES (?)").run(target.id);
+    db.prepare("UPDATE users SET spins=? WHERE discord_id=?")
+      .run(amount, target.id);
+
+    return i.reply(`✅ Set spins to ${amount}`);
+  }
+
+  // SET MESSAGES
+  if (i.commandName === "setmessages") {
+    if (!i.member.permissions.has("Administrator"))
+      return i.reply({ content: "❌ Admin only", ephemeral: true });
+
+    const target = i.options.getUser("user");
+    const amount = i.options.getInteger("amount");
+
+    db.prepare("INSERT OR IGNORE INTO users (discord_id) VALUES (?)").run(target.id);
+    db.prepare("UPDATE users SET messages=? WHERE discord_id=?")
+      .run(amount, target.id);
+
+    return i.reply(`✅ Set messages to ${amount}`);
+  }
+
 });
 
 // =====================
