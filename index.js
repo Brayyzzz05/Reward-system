@@ -9,7 +9,6 @@ import {
 
 import pool from "./database.js";
 import config from "./config.js";
-import { deliverReward, startRewardWorker } from "./rewardSystem.js";
 
 // =====================
 // CLIENT
@@ -30,7 +29,19 @@ async function db(q, p = []) {
 }
 
 // =====================
-// USER FETCH / CREATE
+// RCON (KEEP YOUR EXISTING ONE)
+// =====================
+async function runCommand(cmd) {
+  // 🔴 replace this with your real RCON function if already exists
+  // for now we assume it's globally available or imported elsewhere
+
+  if (!global.rconSend) throw new Error("RCON not set");
+
+  return global.rconSend(cmd);
+}
+
+// =====================
+// USER GET / CREATE
 // =====================
 async function getUser(id) {
   await db(`
@@ -48,7 +59,7 @@ async function getUser(id) {
 }
 
 // =====================
-// MESSAGE TRACKER (CURRENCY)
+// MESSAGE TRACKER
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -62,75 +73,98 @@ client.on("messageCreate", async (m) => {
 });
 
 // =====================
+// REWARD SYSTEM (INLINE)
+// =====================
+function makeHash(id, cmd) {
+  return require("crypto")
+    .createHash("sha256")
+    .update(id + cmd + Date.now())
+    .digest("hex");
+}
+
+// =====================
+// DELIVERY SYSTEM
+// =====================
+async function deliverReward(discordId, mcName, cmd) {
+  const finalCmd = cmd.replace("{player}", mcName);
+  const hash = makeHash(discordId, finalCmd);
+
+  // ❌ anti-dupe
+  const check = await db(
+    "SELECT * FROM delivered_rewards WHERE reward_hash=$1",
+    [hash]
+  );
+
+  if (check.rows.length > 0) return;
+
+  try {
+    await runCommand(finalCmd);
+
+    await db(
+      "INSERT INTO delivered_rewards (reward_hash) VALUES ($1)",
+      [hash]
+    );
+
+    console.log("⚡ DELIVERED:", finalCmd);
+
+  } catch (e) {
+    await db(`
+      INSERT INTO reward_queue
+      (discord_id, minecraft_name, command, status, reward_hash, created_at)
+      VALUES ($1,$2,$3,'pending',$4,$5)
+    `, [discordId, mcName, finalCmd, hash, Date.now()]);
+
+    console.log("📦 QUEUED:", finalCmd);
+  }
+}
+
+// =====================
+// QUEUE WORKER (offline retry)
+// =====================
+setInterval(async () => {
+  const res = await db(`
+    SELECT * FROM reward_queue
+    WHERE status='pending'
+    LIMIT 20
+  `);
+
+  for (const row of res.rows) {
+    try {
+      await runCommand(row.command);
+
+      await db(
+        "UPDATE reward_queue SET status='delivered' WHERE id=$1",
+        [row.id]
+      );
+
+      console.log("🎁 SENT:", row.command);
+
+    } catch (e) {
+      // still offline
+    }
+  }
+}, 3000);
+
+// =====================
 // COMMANDS
 // =====================
 const commands = [];
 
-const add = (cmd) => commands.push(cmd.toJSON());
-
-// USER
-add(new SlashCommandBuilder().setName("stats").setDescription("View stats"));
-add(new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"));
-add(new SlashCommandBuilder().setName("daily").setDescription("Daily reward"));
-add(new SlashCommandBuilder().setName("shop").setDescription("Shop"));
-add(new SlashCommandBuilder().setName("odds").setDescription("View odds"));
-
-// VERIFY (MC LINK)
-add(
-  new SlashCommandBuilder()
-    .setName("verify")
-    .setDescription("Link Minecraft account")
+commands.push(
+  new SlashCommandBuilder().setName("stats").setDescription("View stats"),
+  new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"),
+  new SlashCommandBuilder().setName("shop").setDescription("Shop"),
+  new SlashCommandBuilder().setName("verify")
+    .setDescription("Link Minecraft")
     .addStringOption(o =>
       o.setName("username")
-        .setDescription("Minecraft username")
+        .setDescription("MC name")
         .setRequired(true)
     )
 );
 
-// BUY
-add(
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription("Buy items")
-    .addStringOption(o =>
-      o.setName("item").setDescription("spin or luck").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-// ADMIN
-add(
-  new SlashCommandBuilder()
-    .setName("setspins")
-    .setDescription("Admin set spins")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-add(
-  new SlashCommandBuilder()
-    .setName("setmessages")
-    .setDescription("Admin set messages")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-add(
-  new SlashCommandBuilder()
-    .setName("setluck")
-    .setDescription("Admin set luck")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addNumberOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true))
-);
-
 // =====================
-// REGISTER COMMANDS
+// REGISTER
 // =====================
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -140,7 +174,7 @@ async function registerCommands() {
       process.env.CLIENT_ID,
       process.env.GUILD_ID
     ),
-    { body: commands }
+    { body: commands.map(c => c.toJSON()) }
   );
 
   console.log("✅ Commands registered");
@@ -151,211 +185,77 @@ async function registerCommands() {
 // =====================
 client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
-
   await registerCommands();
-
-  // 🔁 START REWARD SYSTEM WORKER
-  startRewardWorker();
 });
-
-// =====================
-// HELPERS
-// =====================
-const reply = (i, msg) => {
-  if (!i.replied) return i.reply(msg).catch(()=>{});
-};
 
 // =====================
 // INTERACTIONS
 // =====================
 client.on("interactionCreate", async (i) => {
-  try {
-    if (!i.isChatInputCommand()) return;
+  if (!i.isChatInputCommand()) return;
 
-    const u = await getUser(i.user.id);
-    const isAdmin = i.memberPermissions?.has("Administrator");
+  const u = await getUser(i.user.id);
 
-    // =====================
-    // VERIFY
-    // =====================
-    if (i.commandName === "verify") {
-      const name = i.options.getString("username");
+  // VERIFY
+  if (i.commandName === "verify") {
+    const name = i.options.getString("username");
 
-      await db(`
-        UPDATE users
-        SET minecraft_name=$1
-        WHERE discord_id=$2
-      `, [name, i.user.id]);
+    await db(`
+      UPDATE users
+      SET minecraft_name=$1
+      WHERE discord_id=$2
+    `, [name, i.user.id]);
 
-      return reply(i, `✅ Linked to Minecraft: **${name}**`);
-    }
+    return i.reply(`✅ Linked: ${name}`);
+  }
 
-    // =====================
-    // STATS
-    // =====================
-    if (i.commandName === "stats") {
-      return reply(i,
-`📊 Stats
-💬 Messages: ${u.messages}
-🎟 Spins: ${u.spins}
-🍀 Luck: ${u.luck_multi}`
-      );
-    }
+  // STATS
+  if (i.commandName === "stats") {
+    return i.reply(
+      `💬 ${u.messages} msgs\n🎟 ${u.spins} spins\n🍀 ${u.luck_multi} luck`
+    );
+  }
 
-    // =====================
-    // SHOP
-    // =====================
-    if (i.commandName === "shop") {
-      return reply(i,
+  // SHOP
+  if (i.commandName === "shop") {
+    return i.reply(
 `🛒 SHOP
+spin x1 = 20 msgs
+spin x5 = 80 msgs
+luck x5 = 500 msgs`
+    );
+  }
 
-🎟 spin x1 = 20 msgs
-🎟 spin x5 = 80 msgs
+  // ROLL
+  if (i.commandName === "roll") {
+    if (!u.minecraft_name)
+      return i.reply("❌ /verify first");
 
-🍀 luck x1 = 100 msgs
-🍀 luck x5 = 500 msgs
+    if (u.spins <= 0)
+      return i.reply("❌ no spins");
 
-Use /buy`
-      );
-    }
+    await db(
+      "UPDATE users SET spins = spins - 1 WHERE discord_id=$1",
+      [i.user.id]
+    );
 
-    // =====================
-    // BUY
-    // =====================
-    if (i.commandName === "buy") {
-      const item = i.options.getString("item");
-      const amount = i.options.getInteger("amount");
+    const pool = config.reward.pool;
+    let total = pool.reduce((a,b)=>a+b.chance,0);
+    let r = Math.random() * total;
 
-      if (item === "spin") {
-        const cost = amount >= 5 ? 80 : 20 * amount;
+    let result;
 
-        if (u.messages < cost)
-          return reply(i, "❌ not enough messages");
-
-        await db(`
-          UPDATE users
-          SET spins = spins + $1,
-              messages = messages - $2
-          WHERE discord_id=$3
-        `, [amount, cost, i.user.id]);
-
-        return reply(i, `🎟 bought ${amount} spins`);
+    for (const p of pool) {
+      if (r < p.chance) {
+        result = p;
+        break;
       }
-
-      if (item === "luck") {
-        const cost = amount >= 5 ? 500 : 100 * amount;
-
-        if (u.messages < cost)
-          return reply(i, "❌ not enough messages");
-
-        await db(`
-          UPDATE users
-          SET luck_multi = luck_multi + $1,
-              messages = messages - $2
-          WHERE discord_id=$3
-        `, [amount, cost, i.user.id]);
-
-        return reply(i, `🍀 bought ${amount} luck`);
-      }
-
-      return reply(i, "❌ invalid item");
+      r -= p.chance;
     }
 
-    // =====================
-    // DAILY
-    // =====================
-    if (i.commandName === "daily") {
-      const now = Date.now();
+    await deliverReward(i.user.id, u.minecraft_name, result.cmd);
 
-      if (u.last_daily && now - u.last_daily < 86400000)
-        return reply(i, "⏳ cooldown");
-
-      await db(`
-        UPDATE users
-        SET spins = spins + 2,
-            last_daily = $1
-        WHERE discord_id=$2
-      `, [now, i.user.id]);
-
-      return reply(i, "🎁 +2 spins");
-    }
-
-    // =====================
-    // ODDS
-    // =====================
-    if (i.commandName === "odds") {
-      const pool = config.reward.pool;
-      const total = pool.reduce((a,b)=>a+b.chance,0);
-
-      let msg = "📊 Odds\n\n";
-
-      for (const p of pool) {
-        msg += `${p.cmd} → ${((p.chance/total)*100).toFixed(4)}%\n`;
-      }
-
-      return reply(i, msg);
-    }
-
-    // =====================
-    // ROLL (REWARD DELIVERY)
-    // =====================
-    if (i.commandName === "roll") {
-
-      if (!u.minecraft_name)
-        return reply(i, "❌ Use /verify first");
-
-      if (u.spins <= 0)
-        return reply(i, "❌ no spins");
-
-      await db("UPDATE users SET spins = spins - 1 WHERE discord_id=$1", [i.user.id]);
-
-      const pool = config.reward.pool;
-      let total = pool.reduce((a,b)=>a+b.chance,0);
-      let r = Math.random() * total;
-
-      let result;
-
-      for (const p of pool) {
-        if (r < p.chance) {
-          result = p;
-          break;
-        }
-        r -= p.chance;
-      }
-
-      await deliverReward(i.user.id, u.minecraft_name, result.cmd);
-
-      return reply(i, "🎰 Reward processing...");
-    }
-
-    // =====================
-    // ADMIN
-    // =====================
-    if (!isAdmin &&
-      ["setspins","setmessages","setluck"].includes(i.commandName)) {
-      return reply(i, "❌ admin only");
-    }
-
-    if (i.commandName === "setspins") {
-      await db("UPDATE users SET spins=$1 WHERE discord_id=$2",
-        [i.options.getInteger("amount"), i.options.getUser("user").id]);
-      return reply(i, "✅ done");
-    }
-
-    if (i.commandName === "setmessages") {
-      await db("UPDATE users SET messages=$1 WHERE discord_id=$2",
-        [i.options.getInteger("amount"), i.options.getUser("user").id]);
-      return reply(i, "✅ done");
-    }
-
-    if (i.commandName === "setluck") {
-      await db("UPDATE users SET luck_multi=$1 WHERE discord_id=$2",
-        [i.options.getNumber("amount"), i.options.getUser("user").id]);
-      return reply(i, "✅ done");
-    }
-
-  } catch (e) {
-    console.error(e);
+    return i.reply("🎰 rolling reward...");
   }
 });
 
