@@ -5,16 +5,17 @@ const { Pool } = pg;
 // ENV CHECK
 // =====================
 if (!process.env.DATABASE_URL) {
-  console.error("❌ Missing DATABASE_URL in environment variables");
+  console.error("❌ Missing DATABASE_URL");
   process.exit(1);
 }
 
 // =====================
-// POOL CONFIG (SAFE FOR RAILWAY / CLOUD HOSTING)
+// POOL (CLOUD SAFE)
 // =====================
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 
+  // IMPORTANT for Railway / Render / Neon / Supabase
   ssl: {
     rejectUnauthorized: false
   },
@@ -25,73 +26,82 @@ const pool = new Pool({
 });
 
 // =====================
-// CONNECTION TEST
+// TEST CONNECTION (NON-FATAL)
 // =====================
 pool.connect()
   .then(client => {
-    console.log("🗄️ Database connected successfully");
+    console.log("✅ Database connected");
     client.release();
   })
   .catch(err => {
-    console.error("❌ Database connection failed:", err.message);
+    console.log("⚠️ DB not ready yet:", err.message);
   });
 
 // =====================
-// SAFE QUERY WRAPPER (ANTI CRASH + AUTO RETRY)
+// RETRY WRAPPER (ANTI CRASH)
 // =====================
-async function query(text, params) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+async function query(text, params = []) {
+  let lastError;
+
+  for (let i = 0; i < 3; i++) {
     try {
       return await pool.query(text, params);
     } catch (err) {
-      console.warn(`⚠️ DB retry ${attempt}/3 failed:`, err.message);
+      lastError = err;
+      console.log(`⚠️ DB retry ${i + 1}/3:`, err.message);
 
-      // wait before retrying
-      await new Promise(res => setTimeout(res, 1000 * attempt));
+      // exponential backoff
+      await new Promise(r => setTimeout(r, 500 * (i + 1)));
     }
   }
 
-  throw new Error("❌ Database query failed after 3 retries");
+  console.error("❌ DB failed after retries:", lastError.message);
+  throw lastError;
 }
 
 // =====================
-// OPTIONAL HELPERS (USED BY YOUR BOT)
+// SAFE INIT TABLES (AUTO FIX MISSING TABLES)
 // =====================
+export async function initDatabase() {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS users (
+        discord_id TEXT PRIMARY KEY,
+        minecraft_name TEXT,
+        spins INTEGER DEFAULT 0,
+        luck INTEGER DEFAULT 0,
+        messages INTEGER DEFAULT 0
+      )
+    `);
 
-// Create user safely (used in verify / commands)
-async function createUserIfNotExists(discordId) {
-  return query(
-    `INSERT INTO users (discord_id)
-     VALUES ($1)
-     ON CONFLICT (discord_id) DO NOTHING`,
-    [discordId]
-  );
-}
+    await query(`
+      CREATE TABLE IF NOT EXISTS delivered_rewards (
+        reward_hash TEXT PRIMARY KEY,
+        created_at BIGINT
+      )
+    `);
 
-// Get user safely
-async function getUser(discordId) {
-  const res = await query(
-    `SELECT * FROM users WHERE discord_id=$1`,
-    [discordId]
-  );
+    await query(`
+      CREATE TABLE IF NOT EXISTS reward_queue (
+        id SERIAL PRIMARY KEY,
+        discord_id TEXT,
+        minecraft_name TEXT,
+        command TEXT,
+        status TEXT DEFAULT 'pending',
+        reward_hash TEXT,
+        created_at BIGINT
+      )
+    `);
 
-  return res.rows[0] || null;
-}
-
-// Update user field safely
-async function updateUserField(discordId, field, value) {
-  return query(
-    `UPDATE users SET ${field}=$1 WHERE discord_id=$2`,
-    [value, discordId]
-  );
+    console.log("📦 Database tables ready");
+  } catch (err) {
+    console.error("❌ DB init failed:", err.message);
+  }
 }
 
 // =====================
 // EXPORT
 // =====================
 export default {
-  query,
-  createUserIfNotExists,
-  getUser,
-  updateUserField
+  query
 };
