@@ -27,18 +27,15 @@ const client = new Client({
 const guaranteeMap = new Map();
 
 // =====================
-// DB SAFE WRAPPER
+// SAFE DB WRAPPER
 // =====================
 async function db(q, p = []) {
-  for (let i = 0; i < 3; i++) {
-    try {
-      return await pool.query(q, p);
-    } catch (e) {
-      console.warn("DB retry:", e.message);
-      await new Promise(r => setTimeout(r, 1000));
-    }
+  try {
+    return await pool.query(q, p);
+  } catch (e) {
+    console.error("DB ERROR:", e.message);
+    throw e;
   }
-  throw new Error("DB failed");
 }
 
 // =====================
@@ -60,7 +57,7 @@ async function getUser(id) {
 }
 
 // =====================
-// MESSAGE TRACKER
+// MESSAGE TRACKER (CURRENCY)
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -74,90 +71,102 @@ client.on("messageCreate", async (m) => {
 });
 
 // =====================
-// COMMANDS
+// SAFE COMMAND BUILDER
 // =====================
-const commands = [
+const commands = [];
 
-  new SlashCommandBuilder()
-    .setName("stats")
-    .setDescription("View stats"),
-
-  new SlashCommandBuilder()
-    .setName("roll")
-    .setDescription("Spin rewards"),
-
-  new SlashCommandBuilder()
-    .setName("daily")
-    .setDescription("Claim daily rewards"),
-
-  new SlashCommandBuilder()
-    .setName("odds")
-    .setDescription("View chances"),
-
-  new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription("Shop info"),
-
-  new SlashCommandBuilder()
-    .setName("buy")
-    .setDescription("Buy items")
-    .addStringOption(o =>
-      o.setName("item")
-        .setDescription("spin or luck")
-        .setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("amount")
-        .setRequired(true)),
-
-  // ADMIN
-  new SlashCommandBuilder()
-    .setName("setspins")
-    .setDescription("Admin set spins")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("setmessages")
-    .setDescription("Admin set messages")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true)),
-
-  new SlashCommandBuilder()
-    .setName("setluck")
-    .setDescription("Admin set luck")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addNumberOption(o =>
-      o.setName("amount").setDescription("amount").setRequired(true)),
-
-  // =====================
-  // UPDATED GUARANTEE COMMAND
-  // =====================
-  new SlashCommandBuilder()
-    .setName("rarityset")
-    .setDescription("Admin: set rarity guarantee")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("target user")
-        .setRequired(true))
-    .addStringOption(o =>
-      o.setName("rarity")
-        .setDescription("common rare epic legendary jackpot")
-        .setRequired(true))
-    .addBooleanOption(o =>
-      o.setName("state")
-        .setDescription("true / false")
-        .setRequired(true))
-
-].map(c => c.toJSON());
+const add = (cmd) => commands.push(cmd.toJSON());
 
 // =====================
-// REGISTER
+// USER COMMANDS
+// =====================
+add(new SlashCommandBuilder()
+  .setName("stats")
+  .setDescription("View stats")
+);
+
+add(new SlashCommandBuilder()
+  .setName("roll")
+  .setDescription("Spin rewards")
+);
+
+add(new SlashCommandBuilder()
+  .setName("daily")
+  .setDescription("Claim daily reward")
+);
+
+add(new SlashCommandBuilder()
+  .setName("shop")
+  .setDescription("View shop")
+);
+
+add(new SlashCommandBuilder()
+  .setName("odds")
+  .setDescription("View chances")
+);
+
+// BUY
+add(new SlashCommandBuilder()
+  .setName("buy")
+  .setDescription("Buy items")
+  .addStringOption(o =>
+    o.setName("item")
+      .setDescription("spin or luck")
+      .setRequired(true))
+  .addIntegerOption(o =>
+    o.setName("amount")
+      .setDescription("amount")
+      .setRequired(true))
+);
+
+// =====================
+// ADMIN COMMANDS
+// =====================
+add(new SlashCommandBuilder()
+  .setName("setspins")
+  .setDescription("Admin set spins")
+  .addUserOption(o =>
+    o.setName("user").setDescription("user").setRequired(true))
+  .addIntegerOption(o =>
+    o.setName("amount").setDescription("amount").setRequired(true))
+);
+
+add(new SlashCommandBuilder()
+  .setName("setmessages")
+  .setDescription("Admin set messages")
+  .addUserOption(o =>
+    o.setName("user").setDescription("user").setRequired(true))
+  .addIntegerOption(o =>
+    o.setName("amount").setDescription("amount").setRequired(true))
+);
+
+add(new SlashCommandBuilder()
+  .setName("setluck")
+  .setDescription("Admin set luck")
+  .addUserOption(o =>
+    o.setName("user").setDescription("user").setRequired(true))
+  .addNumberOption(o =>
+    o.setName("amount").setDescription("amount").setRequired(true))
+);
+
+// GUARANTEE
+add(new SlashCommandBuilder()
+  .setName("rarityset")
+  .setDescription("Admin rarity control")
+  .addUserOption(o =>
+    o.setName("user").setDescription("user").setRequired(true))
+  .addStringOption(o =>
+    o.setName("rarity")
+      .setDescription("common rare epic legendary jackpot")
+      .setRequired(true))
+  .addBooleanOption(o =>
+    o.setName("state")
+      .setDescription("true or false")
+      .setRequired(true))
+);
+
+// =====================
+// REGISTER COMMANDS (FIXED SAFE WAY)
 // =====================
 client.once("ready", async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -170,11 +179,11 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("✅ Bot ready");
+  console.log("✅ Bot Ready & Commands Loaded");
 });
 
 // =====================
-// SAFE REPLY
+// HELPERS
 // =====================
 const reply = (i, msg) => {
   if (!i.replied) return i.reply(msg).catch(()=>{});
@@ -205,24 +214,6 @@ client.on("interactionCreate", async (i) => {
     }
 
     // =====================
-    // DAILY
-    // =====================
-    if (i.commandName === "daily") {
-      const now = Date.now();
-      if (u.last_daily && now - u.last_daily < 86400000)
-        return reply(i, "⏳ cooldown");
-
-      await db(`
-        UPDATE users
-        SET spins = spins + 2,
-            last_daily = $1
-        WHERE discord_id=$2
-      `, [now, id]);
-
-      return reply(i, "🎁 +2 spins");
-    }
-
-    // =====================
     // SHOP
     // =====================
     if (i.commandName === "shop") {
@@ -235,7 +226,7 @@ client.on("interactionCreate", async (i) => {
 🍀 luck x1 = 100 msgs
 🍀 luck x5 = 500 msgs
 
-Use /buy item amount`
+Use /buy`
       );
     }
 
@@ -279,6 +270,25 @@ Use /buy item amount`
       }
 
       return reply(i, "❌ invalid item");
+    }
+
+    // =====================
+    // DAILY
+    // =====================
+    if (i.commandName === "daily") {
+      const now = Date.now();
+
+      if (u.last_daily && now - u.last_daily < 86400000)
+        return reply(i, "⏳ cooldown");
+
+      await db(`
+        UPDATE users
+        SET spins = spins + 2,
+            last_daily = $1
+        WHERE discord_id=$2
+      `, [now, id]);
+
+      return reply(i, "🎁 +2 spins");
     }
 
     // =====================
@@ -335,7 +345,7 @@ Use /buy item amount`
       }
 
       await i.reply("🎰 spinning...");
-      await new Promise(r => setTimeout(r, 1200));
+      await new Promise(r => setTimeout(r, 1000));
 
       return i.editReply(`🎉 ${result.cmd}`);
     }
@@ -349,7 +359,7 @@ Use /buy item amount`
     }
 
     // =====================
-    // RARITY SET (UPDATED)
+    // RARITY SET (FINAL FIXED)
     // =====================
     if (i.commandName === "rarityset") {
 
@@ -359,19 +369,21 @@ Use /buy item amount`
 
       const valid = ["common","rare","epic","legendary","jackpot"];
 
-      if (!valid.includes(rarity)) {
+      if (!valid.includes(rarity))
         return i.reply({ content: "❌ invalid rarity", ephemeral: true });
-      }
 
       if (!state) {
         guaranteeMap.delete(target);
         return i.reply({ content: "🧹 removed", ephemeral: true });
       }
 
-      guaranteeMap.set(target, { rarity, active: true });
+      guaranteeMap.set(target, {
+        rarity,
+        active: true
+      });
 
       return i.reply({
-        content: `🎯 set: ${rarity}`,
+        content: `🎯 set ${rarity}`,
         ephemeral: true
       });
     }
