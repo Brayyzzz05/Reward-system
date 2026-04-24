@@ -27,7 +27,7 @@ const client = new Client({
 });
 
 // =====================
-// RCON SAFE CONNECT
+// RCON SAFE
 // =====================
 let rcon = null;
 
@@ -44,7 +44,6 @@ async function connectRcon() {
     rcon = null;
   }
 }
-
 connectRcon();
 setInterval(connectRcon, 10000);
 
@@ -52,8 +51,8 @@ setInterval(connectRcon, 10000);
 // SAFE SEND
 // =====================
 async function safeSend(cmd) {
-  if (!rcon) return false;
   try {
+    if (!rcon) throw new Error("RCON offline");
     await rcon.send(cmd);
     return true;
   } catch {
@@ -62,14 +61,16 @@ async function safeSend(cmd) {
 }
 
 // =====================
-// 🎰 SLOT SYMBOLS
+// SYMBOLS
 // =====================
 const symbols = ["🍒", "💎", "🪙", "🔥", "⭐", "🪽"];
 
 // =====================
-// 🎲 WEIGHTED REWARD
+// REWARD PICKER
 // =====================
 function getReward(pool) {
+  if (!pool || pool.length === 0) return null;
+
   const total = pool.reduce((a, b) => a + b.chance, 0);
   let r = Math.random() * total;
 
@@ -77,15 +78,17 @@ function getReward(pool) {
     if (r < item.chance) return item.cmd;
     r -= item.chance;
   }
+
+  return null;
 }
 
 // =====================
-// 📦 COMMANDS
+// COMMANDS
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link your Minecraft username")
+    .setDescription("Link Minecraft username")
     .addStringOption(opt =>
       opt.setName("username")
         .setDescription("Your Minecraft username")
@@ -102,7 +105,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("stats")
-    .setDescription("View your stats"),
+    .setDescription("View stats"),
 
   new SlashCommandBuilder()
     .setName("leaderboard")
@@ -112,14 +115,10 @@ const commands = [
     .setName("givespins")
     .setDescription("Admin: give spins")
     .addUserOption(opt =>
-      opt.setName("user")
-        .setDescription("Target user")
-        .setRequired(true)
+      opt.setName("user").setDescription("Target user").setRequired(true)
     )
     .addIntegerOption(opt =>
-      opt.setName("amount")
-        .setDescription("Amount")
-        .setRequired(true)
+      opt.setName("amount").setDescription("Amount").setRequired(true)
     )
 ].map(c => c.toJSON());
 
@@ -144,7 +143,7 @@ client.once("ready", async () => {
 });
 
 // =====================
-// 🎮 COMMAND HANDLER
+// HANDLER
 // =====================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
@@ -154,8 +153,7 @@ client.on("interactionCreate", async (i) => {
 
     const id = i.user.id;
 
-    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-      .get(id);
+    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?").get(id);
 
     if (!user) {
       db.prepare(`
@@ -163,8 +161,7 @@ client.on("interactionCreate", async (i) => {
         VALUES (?, 0, 0, 0)
       `).run(id);
 
-      user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-        .get(id);
+      user = db.prepare("SELECT * FROM users WHERE discord_id = ?").get(id);
     }
 
     // =====================
@@ -181,63 +178,45 @@ client.on("interactionCreate", async (i) => {
     }
 
     // =====================
-    // 🎰 ROLL (ANIMATED)
+    // 🎰 ROLL
     // =====================
     if (i.commandName === "roll") {
 
-      if (!user.mc_username)
+      if (!user?.mc_username)
         return i.editReply("❌ Use /verify first");
 
-      if ((user.spins || 0) <= 0)
+      if ((user?.spins || 0) <= 0)
         return i.editReply("❌ No spins");
 
       db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
         .run(id);
 
-      // 🎬 Animation frames
       let msg = await i.editReply("🎰 Spinning...\n⬜⬜⬜");
 
+      // animation safe
       for (let t = 0; t < 3; t++) {
-        const spin =
-          `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
-          `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
-          `${symbols[Math.floor(Math.random()*symbols.length)]}`;
+        try {
+          const spin =
+            `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+            `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+            `${symbols[Math.floor(Math.random()*symbols.length)]}`;
 
-        await new Promise(r => setTimeout(r, 500));
-        await msg.edit(`🎰 Spinning...\n${spin}`);
+          await new Promise(r => setTimeout(r, 400));
+          await msg.edit(`🎰 Spinning...\n${spin}`);
+        } catch {}
       }
 
-      // 🎯 Final result
-      const final =
-        `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
-        `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
-        `${symbols[Math.floor(Math.random()*symbols.length)]}`;
+      const cmdRaw = getReward(config.reward.pool);
 
-      // 🎁 Reward logic
-      const roll = Math.random();
+      if (!cmdRaw) {
+        return msg.edit("❌ Reward error");
+      }
 
-      let rewardText = "";
-      let cmd = "";
-
-      if (roll < 0.000000001) {
-        cmd = `give ${user.mc_username} netherite_block 1`;
-        rewardText = "💥 JACKPOT!!!";
-      }
-      else if (roll < 0.00001) {
-        cmd = `give ${user.mc_username} elytra 1`;
-        rewardText = "🪽 ELYTRA!!!";
-      }
-      else {
-        cmd = getReward(config.reward.pool)
-          .replace("{player}", user.mc_username);
-        rewardText = `🎁 ${cmd}`;
-      }
+      const cmd = cmdRaw.replace("{player}", user.mc_username);
 
       await safeSend(cmd);
 
-      return msg.edit(
-        `🎰 RESULT:\n${final}\n\n${rewardText}\n🎟️ Spins left: ${user.spins - 1}`
-      );
+      return msg.edit(`🎰 You received:\n\`${cmd}\``);
     }
 
     // =====================
@@ -256,7 +235,9 @@ client.on("interactionCreate", async (i) => {
 
       streak++;
 
-      const reward = config.daily.baseSpins + streak * config.daily.streakBonus;
+      const reward =
+        config.daily.baseSpins +
+        streak * config.daily.streakBonus;
 
       db.prepare(`
         UPDATE users
@@ -271,7 +252,9 @@ client.on("interactionCreate", async (i) => {
     // STATS
     // =====================
     if (i.commandName === "stats") {
-      return i.editReply(`🎰 Spins: ${user.spins}\n🔥 Streak: ${user.streak}`);
+      return i.editReply(
+        `🎰 Spins: ${user.spins || 0}\n🔥 Streak: ${user.streak || 0}`
+      );
     }
 
     // =====================
@@ -279,11 +262,14 @@ client.on("interactionCreate", async (i) => {
     // =====================
     if (i.commandName === "leaderboard") {
       const rows = db.prepare(`
-        SELECT mc_username, spins FROM users ORDER BY spins DESC LIMIT 10
+        SELECT mc_username, spins FROM users
+        ORDER BY spins DESC LIMIT 10
       `).all();
 
       return i.editReply(
-        rows.map((r, i) => `#${i + 1} ${r.mc_username} - ${r.spins}`).join("\n")
+        rows.map((r, i) =>
+          `#${i + 1} ${r.mc_username || "Unknown"} - ${r.spins}`
+        ).join("\n")
       );
     }
 
@@ -298,19 +284,22 @@ client.on("interactionCreate", async (i) => {
       const u = i.options.getUser("user");
       const a = i.options.getInteger("amount");
 
-      db.prepare("UPDATE users SET spins = spins + ? WHERE discord_id = ?")
-        .run(a, u.id);
+      db.prepare(`
+        UPDATE users SET spins = spins + ? WHERE discord_id = ?
+      `).run(a, u.id);
 
       return i.editReply(`🎰 Gave ${a} spins`);
     }
 
   } catch (err) {
-    console.error("❌ ERROR:", err);
+    console.error("❌ FULL ERROR:", err);
+
+    const msg = err?.message || "unknown error";
 
     if (i.deferred || i.replied) {
-      i.editReply("❌ Something broke");
+      i.editReply(`❌ Error: ${msg}`);
     } else {
-      i.reply("❌ Something broke");
+      i.reply(`❌ Error: ${msg}`);
     }
   }
 });
