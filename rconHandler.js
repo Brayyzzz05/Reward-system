@@ -2,17 +2,20 @@ import Rcon from "rcon-client";
 
 let rcon = null;
 let connected = false;
-let connecting = false;
 
 // =====================
-// CONNECT (SAFE + AUTO RETRY)
+// BACKOFF STATE
+// =====================
+let retryDelay = 5000; // start at 5s
+const MAX_DELAY = 60000; // max 60s
+
+// =====================
+// CONNECT FUNCTION
 // =====================
 export async function connectRcon() {
-  if (connected || connecting) return;
-
-  connecting = true;
-
   try {
+    console.log("🔄 Trying RCON connection...");
+
     rcon = await Rcon.Rcon.connect({
       host: process.env.RCON_HOST,
       port: Number(process.env.RCON_PORT),
@@ -20,49 +23,40 @@ export async function connectRcon() {
     });
 
     connected = true;
-    connecting = false;
+    retryDelay = 5000; // reset backoff on success
 
-    console.log("🎮 RCON connected");
+    console.log("🎮 RCON connected successfully");
   } catch (err) {
     connected = false;
-    connecting = false;
 
-    console.log("⚠️ RCON offline — retrying in 10s");
+    console.log(`⚠️ RCON offline. Retrying in ${retryDelay / 1000}s`);
 
-    setTimeout(connectRcon, 10000);
+    // exponential backoff
+    setTimeout(connectRcon, retryDelay);
+
+    retryDelay = Math.min(retryDelay * 2, MAX_DELAY);
   }
 }
 
 // =====================
-// SEND COMMAND SAFELY
+// SAFE COMMAND EXECUTION
 // =====================
 export async function runCommand(cmd) {
-  try {
-    if (!connected || !rcon) {
-      throw new Error("RCON_NOT_READY");
-    }
-
-    return await rcon.send(cmd);
-  } catch (err) {
-    connected = false;
-
-    console.log("⚠️ RCON failed, will retry connection");
-
-    // try reconnect in background
-    setTimeout(connectRcon, 5000);
-
-    throw err;
+  if (!connected || !rcon) {
+    throw new Error("RCON_NOT_CONNECTED");
   }
+
+  return await rcon.send(cmd);
 }
 
 // =====================
-// STATUS CHECK
+// STATUS
 // =====================
 export function isRconOnline() {
   return connected;
 }
 
 // =====================
-// SAFE STARTUP AUTO CONNECT
+// AUTO START (IMPORTANT)
 // =====================
 connectRcon();
