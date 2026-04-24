@@ -27,7 +27,7 @@ const client = new Client({
 const guaranteeMap = new Map();
 
 // =====================
-// SAFE DB WRAPPER
+// DB WRAPPER
 // =====================
 async function db(q, p = []) {
   try {
@@ -57,7 +57,7 @@ async function getUser(id) {
 }
 
 // =====================
-// MESSAGE TRACKER (CURRENCY)
+// MESSAGE CURRENCY TRACKER
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -71,104 +71,78 @@ client.on("messageCreate", async (m) => {
 });
 
 // =====================
-// SAFE COMMAND BUILDER
+// COMMANDS BUILDER (SAFE)
 // =====================
 const commands = [];
 
 const add = (cmd) => commands.push(cmd.toJSON());
 
-// =====================
 // USER COMMANDS
-// =====================
-add(new SlashCommandBuilder()
-  .setName("stats")
-  .setDescription("View stats")
+add(new SlashCommandBuilder().setName("stats").setDescription("View stats"));
+add(new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"));
+add(new SlashCommandBuilder().setName("daily").setDescription("Daily reward"));
+add(new SlashCommandBuilder().setName("shop").setDescription("Shop"));
+add(new SlashCommandBuilder().setName("odds").setDescription("View odds"));
+
+add(
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy items")
+    .addStringOption(o =>
+      o.setName("item").setDescription("spin or luck").setRequired(true))
+    .addIntegerOption(o =>
+      o.setName("amount").setDescription("amount").setRequired(true))
 );
 
-add(new SlashCommandBuilder()
-  .setName("roll")
-  .setDescription("Spin rewards")
+// ADMIN
+add(
+  new SlashCommandBuilder()
+    .setName("setspins")
+    .setDescription("Admin set spins")
+    .addUserOption(o =>
+      o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o =>
+      o.setName("amount").setDescription("amount").setRequired(true))
 );
 
-add(new SlashCommandBuilder()
-  .setName("daily")
-  .setDescription("Claim daily reward")
+add(
+  new SlashCommandBuilder()
+    .setName("setmessages")
+    .setDescription("Admin set messages")
+    .addUserOption(o =>
+      o.setName("user").setDescription("user").setRequired(true))
+    .addIntegerOption(o =>
+      o.setName("amount").setDescription("amount").setRequired(true))
 );
 
-add(new SlashCommandBuilder()
-  .setName("shop")
-  .setDescription("View shop")
+add(
+  new SlashCommandBuilder()
+    .setName("setluck")
+    .setDescription("Admin set luck")
+    .addUserOption(o =>
+      o.setName("user").setDescription("user").setRequired(true))
+    .addNumberOption(o =>
+      o.setName("amount").setDescription("amount").setRequired(true))
 );
 
-add(new SlashCommandBuilder()
-  .setName("odds")
-  .setDescription("View chances")
-);
-
-// BUY
-add(new SlashCommandBuilder()
-  .setName("buy")
-  .setDescription("Buy items")
-  .addStringOption(o =>
-    o.setName("item")
-      .setDescription("spin or luck")
-      .setRequired(true))
-  .addIntegerOption(o =>
-    o.setName("amount")
-      .setDescription("amount")
-      .setRequired(true))
-);
-
-// =====================
-// ADMIN COMMANDS
-// =====================
-add(new SlashCommandBuilder()
-  .setName("setspins")
-  .setDescription("Admin set spins")
-  .addUserOption(o =>
-    o.setName("user").setDescription("user").setRequired(true))
-  .addIntegerOption(o =>
-    o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-add(new SlashCommandBuilder()
-  .setName("setmessages")
-  .setDescription("Admin set messages")
-  .addUserOption(o =>
-    o.setName("user").setDescription("user").setRequired(true))
-  .addIntegerOption(o =>
-    o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-add(new SlashCommandBuilder()
-  .setName("setluck")
-  .setDescription("Admin set luck")
-  .addUserOption(o =>
-    o.setName("user").setDescription("user").setRequired(true))
-  .addNumberOption(o =>
-    o.setName("amount").setDescription("amount").setRequired(true))
-);
-
-// GUARANTEE
-add(new SlashCommandBuilder()
-  .setName("rarityset")
-  .setDescription("Admin rarity control")
-  .addUserOption(o =>
-    o.setName("user").setDescription("user").setRequired(true))
-  .addStringOption(o =>
-    o.setName("rarity")
-      .setDescription("common rare epic legendary jackpot")
-      .setRequired(true))
-  .addBooleanOption(o =>
-    o.setName("state")
-      .setDescription("true or false")
-      .setRequired(true))
+add(
+  new SlashCommandBuilder()
+    .setName("rarityset")
+    .setDescription("Admin rarity control")
+    .addUserOption(o =>
+      o.setName("user").setDescription("user").setRequired(true))
+    .addStringOption(o =>
+      o.setName("rarity")
+        .setDescription("common rare epic legendary jackpot")
+        .setRequired(true))
+    .addBooleanOption(o =>
+      o.setName("state").setDescription("true or false").setRequired(true))
 );
 
 // =====================
-// REGISTER COMMANDS (FIXED SAFE WAY)
+// SAFE COMMAND REGISTRATION
 // =====================
-client.once("ready", async () => {
+const registerCommands = async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
 
   await rest.put(
@@ -179,8 +153,22 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("✅ Bot Ready & Commands Loaded");
-});
+  console.log("✅ Commands registered");
+};
+
+// =====================
+// FUTURE SAFE READY HANDLER (FIX)
+// =====================
+const onReady = async () => {
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  await registerCommands();
+};
+
+// v14 safe
+client.once("ready", onReady);
+
+// future v15 safe (prevents warning)
+client.once("clientReady", onReady);
 
 // =====================
 // HELPERS
@@ -359,7 +347,7 @@ Use /buy`
     }
 
     // =====================
-    // RARITY SET (FINAL FIXED)
+    // RARITY SET
     // =====================
     if (i.commandName === "rarityset") {
 
@@ -377,10 +365,7 @@ Use /buy`
         return i.reply({ content: "🧹 removed", ephemeral: true });
       }
 
-      guaranteeMap.set(target, {
-        rarity,
-        active: true
-      });
+      guaranteeMap.set(target, { rarity, active: true });
 
       return i.reply({
         content: `🎯 set ${rarity}`,
