@@ -19,20 +19,10 @@ const client = new Client({
 });
 
 // =====================
-// SAFE RCON
-// =====================
-async function safeSend(cmd) {
-  try {
-    if (!rcon) return;
-    await rcon.send(cmd);
-  } catch {}
-}
-
-// =====================
-// REWARD PICKER
+// SAFE ROLL SYSTEM
 // =====================
 function getReward(pool) {
-  const total = pool.reduce((a,b)=>a+b.chance,0);
+  const total = pool.reduce((a, b) => a + b.chance, 0);
   let r = Math.random() * total;
 
   for (const item of pool) {
@@ -72,26 +62,41 @@ function applyGuarantee(user, cmd) {
 }
 
 // =====================
-// COMMANDS
+// COMMANDS (FIXED)
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
     .setDescription("Link MC account")
     .addStringOption(o =>
-      o.setName("username").setRequired(true)
+      o.setName("username")
+        .setDescription("Minecraft username")
+        .setRequired(true)
     ),
 
-  new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"),
-  new SlashCommandBuilder().setName("daily").setDescription("Get spins"),
-  new SlashCommandBuilder().setName("stats").setDescription("View stats"),
+  new SlashCommandBuilder()
+    .setName("roll")
+    .setDescription("Spin rewards"),
+
+  new SlashCommandBuilder()
+    .setName("daily")
+    .setDescription("Get spins"),
+
+  new SlashCommandBuilder()
+    .setName("stats")
+    .setDescription("View stats"),
 
   new SlashCommandBuilder()
     .setName("setguarantee")
     .setDescription("Set guarantee tier")
-    .addUserOption(o => o.setName("user").setRequired(true))
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("Target user")
+        .setRequired(true)
+    )
     .addStringOption(o =>
       o.setName("tier")
+        .setDescription("Tier")
         .setRequired(true)
         .addChoices(
           { name: "none", value: "none" },
@@ -182,9 +187,9 @@ client.on("interactionCreate", async i => {
     db.prepare("UPDATE users SET spins=spins-1 WHERE discord_id=?").run(id);
 
     const reward = getReward(config.reward.pool);
-    const cmd = applyGuarantee(user, reward.replace("{player}", user.mc_username || "player"));
+    let cmd = reward.replace("{player}", user.mc_username || "player");
 
-    await safeSend(cmd);
+    cmd = applyGuarantee(user, cmd);
 
     return i.editReply(`🎁 ${cmd}`);
   }
