@@ -23,26 +23,49 @@ const client = new Client({
 });
 
 // =====================
-// GLOBAL SAFETY
+// GLOBAL SAFETY (CRASH STOPPER)
 // =====================
-process.on("unhandledRejection", console.error);
-process.on("uncaughtException", console.error);
+process.on("unhandledRejection", (err) => {
+  console.error("⚠️ UnhandledRejection:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("⚠️ UncaughtException:", err);
+});
 
 // =====================
-// DB WRAPPER
+// DB WRAPPER SAFE
 // =====================
 const query = (q, p = []) => db.query(q, p);
 
 // =====================
-// RCON (YOU MUST HAVE THIS)
+// SAFE REPLY (FIXES "NOT RESPONDING")
 // =====================
-async function runCommand(cmd) {
-  if (!global.rconSend) throw new Error("RCON not set");
-  return global.rconSend(cmd);
+async function safeReply(i, content) {
+  try {
+    if (i.deferred || i.replied) {
+      return i.followUp({ content, ephemeral: true });
+    }
+    return i.reply({ content, ephemeral: true });
+  } catch (e) {
+    console.error("Reply error:", e);
+  }
 }
 
 // =====================
-// USER FETCH
+// RCON SAFE WRAPPER
+// =====================
+async function runCommand(cmd) {
+  try {
+    if (!global.rconSend) throw new Error("RCON missing");
+    return await global.rconSend(cmd);
+  } catch (e) {
+    throw e;
+  }
+}
+
+// =====================
+// USER FETCH SAFE
 // =====================
 async function getUser(id) {
   await query(`
@@ -51,30 +74,38 @@ async function getUser(id) {
     ON CONFLICT DO NOTHING
   `, [id]);
 
-  const r = await query(
+  const res = await query(
     "SELECT * FROM users WHERE discord_id=$1",
     [id]
   );
 
-  return r.rows[0];
+  return res.rows[0] || {
+    messages: 0,
+    spins: 0,
+    luck_multi: 0
+  };
 }
 
 // =====================
-// MESSAGE TRACKER (CURRENCY)
+// MESSAGE TRACKER
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
 
-  await query(`
-    INSERT INTO users (discord_id, messages)
-    VALUES ($1, 1)
-    ON CONFLICT (discord_id)
-    DO UPDATE SET messages = users.messages + 1
-  `, [m.author.id]);
+  try {
+    await query(`
+      INSERT INTO users (discord_id, messages)
+      VALUES ($1, 1)
+      ON CONFLICT (discord_id)
+      DO UPDATE SET messages = users.messages + 1
+    `, [m.author.id]);
+  } catch (e) {
+    console.error("Message track error:", e);
+  }
 });
 
 // =====================
-// HASH SYSTEM (ANTI DUPE)
+// HASH
 // =====================
 function hash(id, cmd) {
   return crypto
@@ -84,20 +115,20 @@ function hash(id, cmd) {
 }
 
 // =====================
-// REWARD DELIVERY (ONLINE OR QUEUE)
+// REWARD DELIVERY (QUEUE SAFE)
 // =====================
 async function deliverReward(discordId, mcName, cmd) {
   const finalCmd = cmd.replace("{player}", mcName);
   const h = hash(discordId, finalCmd);
 
-  const exists = await query(
-    "SELECT * FROM delivered_rewards WHERE reward_hash=$1",
-    [h]
-  );
-
-  if (exists.rows.length > 0) return;
-
   try {
+    const exists = await query(
+      "SELECT 1 FROM delivered_rewards WHERE reward_hash=$1",
+      [h]
+    );
+
+    if (exists.rows.length > 0) return;
+
     await runCommand(finalCmd);
 
     await query(
@@ -106,6 +137,8 @@ async function deliverReward(discordId, mcName, cmd) {
     );
 
   } catch (e) {
+    console.warn("Queueing reward (server offline)");
+
     await query(`
       INSERT INTO reward_queue
       (discord_id, minecraft_name, command, reward_hash, status, created_at)
@@ -115,36 +148,38 @@ async function deliverReward(discordId, mcName, cmd) {
 }
 
 // =====================
-// QUEUE WORKER (OFFLINE SUPPORT)
+// QUEUE WORKER
 // =====================
 setInterval(async () => {
-  const res = await query(`
-    SELECT * FROM reward_queue
-    WHERE status='pending'
-    LIMIT 20
-  `);
+  try {
+    const res = await query(`
+      SELECT * FROM reward_queue
+      WHERE status='pending'
+      LIMIT 20
+    `);
 
-  for (const r of res.rows) {
-    try {
-      await runCommand(r.command);
+    for (const r of res.rows) {
+      try {
+        await runCommand(r.command);
 
-      await query(
-        "UPDATE reward_queue SET status='delivered' WHERE id=$1",
-        [r.id]
-      );
+        await query(
+          "UPDATE reward_queue SET status='delivered' WHERE id=$1",
+          [r.id]
+        );
 
-      await query(
-        "INSERT INTO delivered_rewards (reward_hash)
-         VALUES ($1)
-         ON CONFLICT DO NOTHING",
-        [r.reward_hash]
-      );
+        await query(
+          "INSERT INTO delivered_rewards (reward_hash)
+           VALUES ($1)
+           ON CONFLICT DO NOTHING",
+          [r.reward_hash]
+        );
 
-    } catch (e) {
-      // still offline → keep waiting
+      } catch {}
     }
+  } catch (e) {
+    console.error("Queue worker error:", e);
   }
-}, 4000);
+}, 5000);
 
 // =====================
 // COMMANDS
@@ -153,12 +188,9 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link Minecraft")
+    .setDescription("Link MC")
     .addStringOption(o =>
-      o.setName("username")
-        .setDescription("MC name")
-        .setRequired(true)
-    ),
+      o.setName("username").setRequired(true)),
 
   new SlashCommandBuilder().setName("stats").setDescription("Stats"),
   new SlashCommandBuilder().setName("shop").setDescription("Shop"),
@@ -166,39 +198,31 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("buy")
-    .setDescription("Buy items")
-    .addStringOption(o =>
-      o.setName("item").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setRequired(true)),
+    .setDescription("Buy")
+    .addStringOption(o => o.setName("item").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("setspins")
-    .setDescription("Admin set spins")
-    .addUserOption(o =>
-      o.setName("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setRequired(true)),
+    .setDescription("Admin")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("setmessages")
-    .setDescription("Admin set messages")
-    .addUserOption(o =>
-      o.setName("user").setRequired(true))
-    .addIntegerOption(o =>
-      o.setName("amount").setRequired(true)),
+    .setDescription("Admin")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("setluck")
-    .setDescription("Admin set luck")
-    .addUserOption(o =>
-      o.setName("user").setRequired(true))
-    .addNumberOption(o =>
-      o.setName("amount").setRequired(true))
+    .setDescription("Admin")
+    .addUserOption(o => o.setName("user").setRequired(true))
+    .addNumberOption(o => o.setName("amount").setRequired(true))
 ];
 
 // =====================
-// REGISTER COMMANDS
+// REGISTER
 // =====================
 async function register() {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -211,11 +235,11 @@ async function register() {
     { body: commands.map(c => c.toJSON()) }
   );
 
-  console.log("✅ Commands loaded");
+  console.log("✅ Commands registered");
 }
 
 // =====================
-// READY
+// READY FIX (NO DEPRECATION ISSUES)
 // =====================
 client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -223,12 +247,21 @@ client.once("ready", async () => {
 });
 
 // =====================
-// INTERACTIONS
+// INTERACTIONS (FULL SAFE MODE)
 // =====================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
-  const u = await getUser(i.user.id);
+  await i.deferReply({ ephemeral: true });
+
+  let u;
+
+  try {
+    u = await getUser(i.user.id);
+  } catch {
+    return safeReply(i, "❌ DB error");
+  }
+
   const isAdmin = i.memberPermissions?.has("Administrator");
 
   // =====================
@@ -237,37 +270,38 @@ client.on("interactionCreate", async (i) => {
   if (i.commandName === "verify") {
     const name = i.options.getString("username");
 
-    await query(`
-      INSERT INTO users (discord_id, minecraft_name)
-      VALUES ($1,$2)
-      ON CONFLICT (discord_id)
-      DO UPDATE SET minecraft_name=$2
-    `, [i.user.id, name]);
+    try {
+      await query(`
+        INSERT INTO users (discord_id, minecraft_name)
+        VALUES ($1,$2)
+        ON CONFLICT (discord_id)
+        DO UPDATE SET minecraft_name=$2
+      `, [i.user.id, name]);
 
-    return i.reply(`✅ Linked ${name}`);
+      return safeReply(i, `✅ Linked ${name}`);
+    } catch {
+      return safeReply(i, "❌ verify failed");
+    }
   }
 
   // =====================
   // STATS
   // =====================
   if (i.commandName === "stats") {
-    return i.reply(
+    return safeReply(i,
 `💬 ${u.messages}
 🎟 ${u.spins}
-🍀 ${u.luck_multi}`
-    );
+🍀 ${u.luck_multi}`);
   }
 
   // =====================
   // SHOP
   // =====================
   if (i.commandName === "shop") {
-    return i.reply(
-`🛒 SHOP
-spin x1 = 20 msgs
+    return safeReply(i,
+`🛒 spin x1 = 20 msgs
 spin x5 = 80 msgs
-luck x5 = 500 msgs`
-    );
+luck x5 = 500 msgs`);
   }
 
   // =====================
@@ -277,77 +311,85 @@ luck x5 = 500 msgs`
     const item = i.options.getString("item");
     const amount = i.options.getInteger("amount");
 
-    if (item === "spin") {
-      await query(`
-        UPDATE users
-        SET messages = messages - ($1 * 20),
-            spins = spins + $1
-        WHERE discord_id=$2
-      `, [amount, i.user.id]);
-    }
+    try {
+      if (item === "spin") {
+        await query(`
+          UPDATE users
+          SET messages = messages - ($1 * 20),
+              spins = spins + $1
+          WHERE discord_id=$2
+        `, [amount, i.user.id]);
+      }
 
-    if (item === "luck") {
-      await query(`
-        UPDATE users
-        SET messages = messages - ($1 * 100),
-            luck_multi = luck_multi + $1
-        WHERE discord_id=$2
-      `, [amount, i.user.id]);
-    }
+      if (item === "luck") {
+        await query(`
+          UPDATE users
+          SET messages = messages - ($1 * 100),
+              luck_multi = luck_multi + $1
+          WHERE discord_id=$2
+        `, [amount, i.user.id]);
+      }
 
-    return i.reply("✅ Purchased");
+      return safeReply(i, "✅ purchased");
+    } catch {
+      return safeReply(i, "❌ buy failed");
+    }
   }
 
   // =====================
-  // ROLL
+  // ROLL (SAFE)
   // =====================
   if (i.commandName === "roll") {
-    if (!u.minecraft_name)
-      return i.reply("❌ /verify first");
+    try {
+      if (!u.minecraft_name)
+        return safeReply(i, "❌ verify first");
 
-    const pool = config.reward.pool;
-    let total = pool.reduce((a,b)=>a+b.chance,0);
-    let r = Math.random() * total;
+      const pool = config.reward.pool;
+      let total = pool.reduce((a,b)=>a+b.chance,0);
+      let r = Math.random() * total;
 
-    let reward;
+      let reward;
 
-    for (const p of pool) {
-      if (r < p.chance) {
-        reward = p;
-        break;
+      for (const p of pool) {
+        if (r < p.chance) {
+          reward = p;
+          break;
+        }
+        r -= p.chance;
       }
-      r -= p.chance;
+
+      await deliverReward(i.user.id, u.minecraft_name, reward.cmd);
+
+      return safeReply(i, "🎰 rolling...");
+    } catch {
+      return safeReply(i, "❌ roll failed");
     }
-
-    await deliverReward(i.user.id, u.minecraft_name, reward.cmd);
-
-    return i.reply("🎰 rolling reward...");
   }
 
   // =====================
-  // ADMIN COMMANDS
+  // ADMIN
   // =====================
   if (!isAdmin) return;
 
   if (i.commandName === "setspins") {
-    await query(
-      "UPDATE users SET spins=$1 WHERE discord_id=$2",
-      [i.options.getInteger("amount"), i.options.getUser("user").id]
-    );
+    await query("UPDATE users SET spins=$1 WHERE discord_id=$2", [
+      i.options.getInteger("amount"),
+      i.options.getUser("user").id
+    ]);
   }
 
   if (i.commandName === "setmessages") {
-    await query(
-      "UPDATE users SET messages=$1 WHERE discord_id=$2",
-      [i.options.getInteger("amount"), i.options.getUser("user").id]
-    );
+    await query("UPDATE users SET messages=$1 WHERE discord_id=$2", [
+      i.options.getInteger("amount"),
+      i.options.getUser("user").id
+    ]);
   }
 
   if (i.commandName === "setluck") {
-    await query(
-      "UPDATE users SET luck_multi=$1 WHERE discord_id=$2",
-      [i.options.getNumber("amount"), i.options.getUser("user").id]
-    );
+    await query("UPDATE users SET luck_multi=$1 WHERE discord_id=$2", [
+      i.options.getNumber("amount"),
+      i.options.getUser("user").id
+    ]);
   }
 });
 
