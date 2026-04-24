@@ -40,7 +40,7 @@ async function connectRcon() {
     });
     console.log("✅ RCON Connected");
   } catch {
-    console.log("⚠️ RCON offline (ok)");
+    console.log("⚠️ RCON offline");
     rcon = null;
   }
 }
@@ -62,7 +62,12 @@ async function safeSend(cmd) {
 }
 
 // =====================
-// REWARD SYSTEM
+// 🎰 SLOT SYMBOLS
+// =====================
+const symbols = ["🍒", "💎", "🪙", "🔥", "⭐", "🪽"];
+
+// =====================
+// 🎲 WEIGHTED REWARD
 // =====================
 function getReward(pool) {
   const total = pool.reduce((a, b) => a + b.chance, 0);
@@ -75,7 +80,7 @@ function getReward(pool) {
 }
 
 // =====================
-// COMMANDS
+// 📦 COMMANDS
 // =====================
 const commands = [
   new SlashCommandBuilder()
@@ -89,7 +94,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("roll")
-    .setDescription("Roll for a reward"),
+    .setDescription("Spin the slot machine"),
 
   new SlashCommandBuilder()
     .setName("daily")
@@ -139,135 +144,174 @@ client.once("ready", async () => {
 });
 
 // =====================
-// COMMAND HANDLER
+// 🎮 COMMAND HANDLER
 // =====================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
 
-  const id = i.user.id;
+  try {
+    await i.deferReply();
 
-  let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
-    .get(id);
+    const id = i.user.id;
 
-  if (!user) {
-    db.prepare(`
-      INSERT INTO users (discord_id, spins, streak, last_daily)
-      VALUES (?, 0, 0, 0)
-    `).run(id);
-
-    user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+    let user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
       .get(id);
-  }
 
-  // =====================
-  // VERIFY (DISCORD ONLY)
-  // =====================
-  if (i.commandName === "verify") {
-    const username = i.options.getString("username");
+    if (!user) {
+      db.prepare(`
+        INSERT INTO users (discord_id, spins, streak, last_daily)
+        VALUES (?, 0, 0, 0)
+      `).run(id);
 
-    db.prepare(`
-      UPDATE users SET mc_username = ? WHERE discord_id = ?
-    `).run(username, id);
-
-    return i.reply(`✅ Linked to Minecraft username: ${username}`);
-  }
-
-  // =====================
-  // ROLL
-  // =====================
-  if (i.commandName === "roll") {
-
-    if (!user.mc_username)
-      return i.reply("❌ Use /verify first");
-
-    if ((user.spins || 0) <= 0)
-      return i.reply("❌ No spins");
-
-    db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
-      .run(id);
-
-    const roll = Math.random();
-
-    if (roll < 0.000000001) {
-      await safeSend(`give ${user.mc_username} netherite_block 1`);
-      return i.reply("💥 JACKPOT!!!");
+      user = db.prepare("SELECT * FROM users WHERE discord_id = ?")
+        .get(id);
     }
 
-    if (roll < 0.00001) {
-      await safeSend(`give ${user.mc_username} elytra 1`);
-      return i.reply("🪽 YOU WON AN ELYTRA!");
+    // =====================
+    // VERIFY
+    // =====================
+    if (i.commandName === "verify") {
+      const username = i.options.getString("username");
+
+      db.prepare(`
+        UPDATE users SET mc_username = ? WHERE discord_id = ?
+      `).run(username, id);
+
+      return i.editReply(`✅ Linked to ${username}`);
     }
 
-    const cmd = getReward(config.reward.pool)
-      .replace("{player}", user.mc_username);
+    // =====================
+    // 🎰 ROLL (ANIMATED)
+    // =====================
+    if (i.commandName === "roll") {
 
-    await safeSend(cmd);
+      if (!user.mc_username)
+        return i.editReply("❌ Use /verify first");
 
-    return i.reply(`🎰 You received: \`${cmd}\``);
-  }
+      if ((user.spins || 0) <= 0)
+        return i.editReply("❌ No spins");
 
-  // =====================
-  // DAILY
-  // =====================
-  if (i.commandName === "daily") {
+      db.prepare("UPDATE users SET spins = spins - 1 WHERE discord_id = ?")
+        .run(id);
 
-    const now = Date.now();
-    const day = 86400000;
+      // 🎬 Animation frames
+      let msg = await i.editReply("🎰 Spinning...\n⬜⬜⬜");
 
-    if (now - (user.last_daily || 0) < day)
-      return i.reply("❌ Already claimed");
+      for (let t = 0; t < 3; t++) {
+        const spin =
+          `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+          `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+          `${symbols[Math.floor(Math.random()*symbols.length)]}`;
 
-    let streak = user.streak || 0;
-    if (now - (user.last_daily || 0) > day * 2) streak = 0;
+        await new Promise(r => setTimeout(r, 500));
+        await msg.edit(`🎰 Spinning...\n${spin}`);
+      }
 
-    streak++;
+      // 🎯 Final result
+      const final =
+        `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+        `${symbols[Math.floor(Math.random()*symbols.length)]} ` +
+        `${symbols[Math.floor(Math.random()*symbols.length)]}`;
 
-    const reward = config.daily.baseSpins + streak * config.daily.streakBonus;
+      // 🎁 Reward logic
+      const roll = Math.random();
 
-    db.prepare(`
-      UPDATE users
-      SET spins = spins + ?, streak = ?, last_daily = ?
-      WHERE discord_id = ?
-    `).run(reward, streak, now, id);
+      let rewardText = "";
+      let cmd = "";
 
-    return i.reply(`🎁 +${reward} spins | 🔥 ${streak}`);
-  }
+      if (roll < 0.000000001) {
+        cmd = `give ${user.mc_username} netherite_block 1`;
+        rewardText = "💥 JACKPOT!!!";
+      }
+      else if (roll < 0.00001) {
+        cmd = `give ${user.mc_username} elytra 1`;
+        rewardText = "🪽 ELYTRA!!!";
+      }
+      else {
+        cmd = getReward(config.reward.pool)
+          .replace("{player}", user.mc_username);
+        rewardText = `🎁 ${cmd}`;
+      }
 
-  // =====================
-  // STATS
-  // =====================
-  if (i.commandName === "stats") {
-    return i.reply(`🎰 Spins: ${user.spins}\n🔥 Streak: ${user.streak}`);
-  }
+      await safeSend(cmd);
 
-  // =====================
-  // LEADERBOARD
-  // =====================
-  if (i.commandName === "leaderboard") {
-    const rows = db.prepare(`
-      SELECT mc_username, spins FROM users ORDER BY spins DESC LIMIT 10
-    `).all();
+      return msg.edit(
+        `🎰 RESULT:\n${final}\n\n${rewardText}\n🎟️ Spins left: ${user.spins - 1}`
+      );
+    }
 
-    return i.reply(
-      rows.map((r, i) => `#${i + 1} ${r.mc_username} - ${r.spins}`).join("\n")
-    );
-  }
+    // =====================
+    // DAILY
+    // =====================
+    if (i.commandName === "daily") {
 
-  // =====================
-  // ADMIN
-  // =====================
-  if (i.commandName === "givespins") {
+      const now = Date.now();
+      const day = 86400000;
 
-    if (!i.member.permissions.has("Administrator"))
-      return i.reply("❌ No permission");
+      if (now - (user.last_daily || 0) < day)
+        return i.editReply("❌ Already claimed");
 
-    const u = i.options.getUser("user");
-    const a = i.options.getInteger("amount");
+      let streak = user.streak || 0;
+      if (now - (user.last_daily || 0) > day * 2) streak = 0;
 
-    db.prepare("UPDATE users SET spins = spins + ? WHERE discord_id = ?")
-      .run(a, u.id);
+      streak++;
 
-    return i.reply(`🎰 Gave ${a} spins`);
+      const reward = config.daily.baseSpins + streak * config.daily.streakBonus;
+
+      db.prepare(`
+        UPDATE users
+        SET spins = spins + ?, streak = ?, last_daily = ?
+        WHERE discord_id = ?
+      `).run(reward, streak, now, id);
+
+      return i.editReply(`🎁 +${reward} spins | 🔥 ${streak}`);
+    }
+
+    // =====================
+    // STATS
+    // =====================
+    if (i.commandName === "stats") {
+      return i.editReply(`🎰 Spins: ${user.spins}\n🔥 Streak: ${user.streak}`);
+    }
+
+    // =====================
+    // LEADERBOARD
+    // =====================
+    if (i.commandName === "leaderboard") {
+      const rows = db.prepare(`
+        SELECT mc_username, spins FROM users ORDER BY spins DESC LIMIT 10
+      `).all();
+
+      return i.editReply(
+        rows.map((r, i) => `#${i + 1} ${r.mc_username} - ${r.spins}`).join("\n")
+      );
+    }
+
+    // =====================
+    // ADMIN
+    // =====================
+    if (i.commandName === "givespins") {
+
+      if (!i.member.permissions.has("Administrator"))
+        return i.editReply("❌ No permission");
+
+      const u = i.options.getUser("user");
+      const a = i.options.getInteger("amount");
+
+      db.prepare("UPDATE users SET spins = spins + ? WHERE discord_id = ?")
+        .run(a, u.id);
+
+      return i.editReply(`🎰 Gave ${a} spins`);
+    }
+
+  } catch (err) {
+    console.error("❌ ERROR:", err);
+
+    if (i.deferred || i.replied) {
+      i.editReply("❌ Something broke");
+    } else {
+      i.reply("❌ Something broke");
+    }
   }
 });
 
