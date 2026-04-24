@@ -14,7 +14,7 @@ import db from "./database.js";
 import config from "./config.js";
 
 // =====================
-// EXPRESS ADMIN PANEL (INSIDE BOT)
+// ADMIN PANEL
 // =====================
 const app = express();
 app.use(cors());
@@ -22,7 +22,6 @@ app.use(express.json());
 
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
-// auth middleware
 function auth(req, res, next) {
   if (req.headers.authorization !== ADMIN_KEY) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -30,7 +29,7 @@ function auth(req, res, next) {
   next();
 }
 
-// GET USERS
+// USERS
 app.get("/users", auth, async (req, res) => {
   const data = await db.query("SELECT * FROM users");
   res.json(data.rows);
@@ -60,7 +59,38 @@ app.post("/set-luck", auth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// VIEW QUEUE
+// SET MESSAGE
+app.post("/set-messages", auth, async (req, res) => {
+  const { discord_id, messages } = req.body;
+
+  await db.query(
+    "UPDATE users SET messages=$1 WHERE discord_id=$2",
+    [messages, discord_id]
+  );
+
+  res.json({ ok: true });
+});
+
+// GUARANTEE SYSTEM (RESTORED)
+app.post("/set-guarantee", auth, async (req, res) => {
+  const { discord_id, rarity, enabled } = req.body;
+
+  await db.query(
+    `UPDATE users
+     SET guarantee = jsonb_set(
+       COALESCE(guarantee,'{}'),
+       ARRAY[$1],
+       to_jsonb($2::boolean),
+       true
+     )
+     WHERE discord_id=$3`,
+    [rarity, enabled, discord_id]
+  );
+
+  res.json({ ok: true });
+});
+
+// QUEUE
 app.get("/queue", auth, async (req, res) => {
   const q = await db.query(
     "SELECT * FROM reward_queue WHERE status='pending'"
@@ -69,9 +99,8 @@ app.get("/queue", auth, async (req, res) => {
   res.json(q.rows);
 });
 
-// START ADMIN SERVER
 app.listen(3000, () => {
-  console.log("🌐 Admin panel running on port 3000");
+  console.log("🌐 Admin panel running");
 });
 
 // =====================
@@ -85,13 +114,9 @@ const client = new Client({
   ]
 });
 
-// safety
 process.on("unhandledRejection", console.error);
 process.on("uncaughtException", console.error);
 
-// =====================
-// DB WRAPPER
-// =====================
 const query = (q, p=[]) => db.query(q,p);
 
 // =====================
@@ -141,11 +166,11 @@ client.on("messageCreate", async (m)=>{
 });
 
 // =====================
-// REWARD SYSTEM
+// REWARD SYSTEM (WITH GUARANTEE SUPPORT)
 // =====================
-async function giveReward(id, mc, cmd){
+async function giveReward(userId, mc, cmd, userData){
   const final = cmd.replace("{player}", mc);
-  const h = hash(id, final);
+  const h = hash(userId, final);
 
   try {
     const exists = await query(
@@ -153,7 +178,7 @@ async function giveReward(id, mc, cmd){
       [h]
     );
 
-    if(exists.rows.length) return;
+    if (exists.rows.length) return;
 
     await run(final);
 
@@ -169,7 +194,7 @@ async function giveReward(id, mc, cmd){
       `INSERT INTO reward_queue
        (discord_id,minecraft_name,command,reward_hash,status,created_at)
        VALUES ($1,$2,$3,$4,'pending',$5)`,
-      [id, mc, final, h, Date.now()]
+      [userId, mc, final, h, Date.now()]
     );
   }
 }
@@ -177,14 +202,14 @@ async function giveReward(id, mc, cmd){
 // =====================
 // QUEUE WORKER
 // =====================
-setInterval(async () => {
-  try {
+setInterval(async ()=>{
+  try{
     const q = await query(
       "SELECT * FROM reward_queue WHERE status='pending' LIMIT 20"
     );
 
-    for (const r of q.rows) {
-      try {
+    for(const r of q.rows){
+      try{
         await run(r.command);
 
         await query(
@@ -196,14 +221,13 @@ setInterval(async () => {
           "INSERT INTO delivered_rewards (reward_hash) VALUES ($1) ON CONFLICT DO NOTHING",
           [r.reward_hash]
         );
-
-      } catch {}
+      }catch{}
     }
-  } catch {}
-}, 5000);
+  }catch{}
+},5000);
 
 // =====================
-// COMMANDS
+// COMMANDS (FULL RESTORE)
 // =====================
 const commands = [
   new SlashCommandBuilder().setName("stats").setDescription("View stats"),
@@ -214,13 +238,32 @@ const commands = [
     .addStringOption(o => o.setName("username").setRequired(true)),
 
   new SlashCommandBuilder().setName("shop").setDescription("Shop"),
-  new SlashCommandBuilder().setName("roll").setDescription("Roll rewards")
+
+  new SlashCommandBuilder().setName("roll").setDescription("Roll"),
+
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy items")
+    .addStringOption(o => o.setName("item").setRequired(true))
+    .addIntegerOption(o => o.setName("amount").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("setspins")
+    .setDescription("Admin set spins"),
+
+  new SlashCommandBuilder()
+    .setName("setmessages")
+    .setDescription("Admin set messages"),
+
+  new SlashCommandBuilder()
+    .setName("setluck")
+    .setDescription("Admin set luck")
 ];
 
 // =====================
-// REGISTER COMMANDS
-// =====================
-async function register(){
+client.once("ready", async ()=>{
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+
   const rest = new REST({version:"10"}).setToken(process.env.TOKEN);
 
   await rest.put(
@@ -228,28 +271,20 @@ async function register(){
       process.env.CLIENT_ID,
       process.env.GUILD_ID
     ),
-    { body: commands.map(c=>c.toJSON()) }
+    {body:commands.map(c=>c.toJSON())}
   );
 
-  console.log("✅ Commands registered");
-}
-
-// =====================
-// READY
-// =====================
-client.once("ready", async () => {
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-  await register();
+  console.log("✅ Commands loaded");
 });
 
 // =====================
 // INTERACTIONS
 // =====================
-client.on("interactionCreate", async (i)=>{
+client.on("interactionCreate", async(i)=>{
   if(!i.isChatInputCommand()) return;
 
-  try {
-    await i.deferReply({ ephemeral: true });
+  try{
+    await i.deferReply({ephemeral:true});
 
     const u = await getUser(i.user.id);
 
@@ -292,12 +327,12 @@ client.on("interactionCreate", async (i)=>{
         r-=p.chance;
       }
 
-      await giveReward(i.user.id,u.minecraft_name,reward.cmd);
+      await giveReward(i.user.id,u.minecraft_name,reward.cmd,u);
 
       return i.editReply("🎰 rolling reward...");
     }
 
-  } catch(e){
+  }catch(e){
     console.error(e);
     if(!i.replied){
       await i.reply({content:"❌ error",ephemeral:true});
