@@ -2,6 +2,20 @@ export default {
   reward: {
     messagesRequired: 20,
 
+    // 🍀 user luck multipliers
+    luckyUsers: {
+      brayyzzz: 3
+    },
+
+    // 🧪 admin luck multiplier (ONLY when luckmode is ON)
+    adminLuckMultiplier: 100,
+
+    // 🎯 guaranteed ultra rare override
+    guaranteedUltra: {
+      enabled: true,
+      discordId: "REPLACE_WITH_YOUR_DISCORD_ID"
+    },
+
     pool: [
       // 🌿 COMMON
       { cmd: "give {player} oak_log 16", chance: 3000 },
@@ -32,7 +46,7 @@ export default {
   },
 
   cooldowns: {
-    roll: 10,      // seconds between /roll
-    message: 15    // seconds per counted message
+    roll: 10,
+    message: 15
   }
 };
