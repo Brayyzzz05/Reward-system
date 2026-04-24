@@ -1,17 +1,13 @@
-import "dotenv/config";
 import { Client, GatewayIntentBits } from "discord.js";
+import { loadCommands } from "./handlers/commandHandler.js";
+import dotenv from "dotenv";
 
-import { initDatabase } from "./core/database.js";
-import { connectRcon } from "./core/rconHandler.js";
-import { startRewardWorker } from "./systems/rewardQueueWorker.js";
+dotenv.config();
 
-import { registerAdminCommands } from "./commands/adminCommands.js";
-import { registerRewardCommands } from "./commands/rewardCommands.js";
-import { registerShopCommands } from "./commands/shopCommands.js";
-
-console.log("🚀 Starting bot...");
-
-export const client = new Client({
+// =====================
+// DISCORD CLIENT
+// =====================
+const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
@@ -19,18 +15,19 @@ export const client = new Client({
   ]
 });
 
-// INIT SYSTEMS
-await initDatabase();
-await connectRcon();
-startRewardWorker();
-
-// COMMANDS
-registerAdminCommands(client);
-registerRewardCommands(client);
-registerShopCommands(client);
-
+// =====================
+// READY EVENT
+// =====================
 client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
+// =====================
+// LOAD COMMAND SYSTEM
+// =====================
+loadCommands(client);
+
+// =====================
+// LOGIN
+// =====================
 client.login(process.env.TOKEN);
