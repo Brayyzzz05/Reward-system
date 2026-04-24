@@ -1,16 +1,17 @@
 {
   "name": "mc-rewards-bot",
   "version": "1.0.0",
-  "description": "Discord to Minecraft rewards bot",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "discord.js": "^14.14.1",
-    "better-sqlite3": "^9.4.0",
-    "rcon-client": "^4.2.3",
-    "dotenv": "^16.4.5"
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5",
+    "pg": "^8.11.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
