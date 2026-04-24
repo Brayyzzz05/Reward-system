@@ -7,7 +7,7 @@ import {
   SlashCommandBuilder
 } from "discord.js";
 
-import db from "./database.js";
+import pool from "./database.js";
 import config from "./config.js";
 
 const client = new Client({
@@ -19,18 +19,21 @@ const client = new Client({
 });
 
 // =====================
-// SAFE USER GET/CREATE
+// USER SAFE GET/CREATE
 // =====================
-function getUser(id) {
-  db.prepare(`
+async function getUser(id) {
+  await pool.query(`
     INSERT INTO users (discord_id)
-    VALUES (?)
-    ON CONFLICT(discord_id) DO NOTHING
-  `).run(id);
+    VALUES ($1)
+    ON CONFLICT (discord_id) DO NOTHING
+  `, [id]);
 
-  return db.prepare(
-    "SELECT * FROM users WHERE discord_id=?"
-  ).get(id);
+  const res = await pool.query(
+    "SELECT * FROM users WHERE discord_id=$1",
+    [id]
+  );
+
+  return res.rows[0];
 }
 
 // =====================
@@ -59,15 +62,11 @@ const commands = [
     .setDescription("View stats"),
 
   new SlashCommandBuilder()
-    .setName("shop")
-    .setDescription("Open shop"),
-
-  new SlashCommandBuilder()
     .setName("buy")
     .setDescription("Buy items")
     .addStringOption(o =>
       o.setName("item")
-        .setDescription("Item to buy")
+        .setDescription("Item")
         .setRequired(true)
         .addChoices(
           { name: "Spin (1) - 20 msgs", value: "spin1" },
@@ -84,39 +83,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("odds")
-    .setDescription("View drop chances"),
-
-  // =====================
-  // ADMIN SET COMMANDS
-  // =====================
-
-  new SlashCommandBuilder()
-    .setName("setspins")
-    .setDescription("Set user spins (admin only)")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Target user")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Spin amount")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("setmessages")
-    .setDescription("Set user messages (admin only)")
-    .addUserOption(o =>
-      o.setName("user")
-        .setDescription("Target user")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("amount")
-        .setDescription("Message amount")
-        .setRequired(true)
-    )
+    .setDescription("View drop chances")
 ].map(c => c.toJSON());
 
 // =====================
@@ -133,7 +100,7 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("🤖 BOT READY (SET COMMANDS FIXED)");
+  console.log("🤖 BOT READY (POSTGRES MODE)");
 });
 
 // =====================
@@ -143,7 +110,7 @@ client.on("interactionCreate", async i => {
   if (!i.isChatInputCommand()) return;
 
   const id = i.user.id;
-  const user = getUser(id);
+  const user = await getUser(id);
 
   // =====================
   // VERIFY
@@ -151,9 +118,10 @@ client.on("interactionCreate", async i => {
   if (i.commandName === "verify") {
     const name = i.options.getString("username");
 
-    db.prepare(
-      "UPDATE users SET mc_username=? WHERE discord_id=?"
-    ).run(name, id);
+    await pool.query(
+      "UPDATE users SET mc_username=$1 WHERE discord_id=$2",
+      [name, id]
+    );
 
     return i.reply("✅ linked");
   }
@@ -173,12 +141,12 @@ client.on("interactionCreate", async i => {
       return i.reply(`⏳ Come back in ${h}h ${m}m`);
     }
 
-    db.prepare(`
+    await pool.query(`
       UPDATE users
       SET spins = spins + 2,
-          last_daily = ?
-      WHERE discord_id = ?
-    `).run(now, id);
+          last_daily = $1
+      WHERE discord_id = $2
+    `, [now, id]);
 
     return i.reply("🎁 +2 spins");
   }
@@ -193,13 +161,6 @@ client.on("interactionCreate", async i => {
 💬 Messages: ${user.messages}
 🍀 Luck: x${user.luck_multi}`
     );
-  }
-
-  // =====================
-  // SHOP
-  // =====================
-  if (i.commandName === "shop") {
-    return i.reply("🛒 Use /buy spin1, spin5, luck1, luck2");
   }
 
   // =====================
@@ -222,57 +183,72 @@ client.on("interactionCreate", async i => {
       return i.reply("❌ Not enough messages");
     }
 
-    db.prepare(`
+    await pool.query(`
       UPDATE users
-      SET messages = messages - ?,
-          spins = spins + ?,
-          luck_multi = luck_multi + ?
-      WHERE discord_id = ?
-    `).run(total, spins * amount, luck * amount, id);
+      SET messages = messages - $1,
+          spins = spins + $2,
+          luck_multi = luck_multi + $3
+      WHERE discord_id = $4
+    `, [total, spins * amount, luck * amount, id]);
 
     return i.reply(`✅ Bought x${amount}`);
   }
 
   // =====================
-  // SET SPINS (ADMIN)
+  // ODDS
   // =====================
-  if (i.commandName === "setspins") {
-    if (!i.member.permissions.has("Administrator"))
-      return i.reply({ content: "❌ Admin only", ephemeral: true });
+  if (i.commandName === "odds") {
+    const poolData = config.reward.pool;
+    const luck = user.luck_multi || 1;
 
-    const target = i.options.getUser("user");
-    const amount = i.options.getInteger("amount");
+    const total = poolData.reduce((a,b)=>a+b.chance,0);
 
-    getUser(target.id);
+    let msg = "📊 Odds:\n\n";
 
-    db.prepare(
-      "UPDATE users SET spins=? WHERE discord_id=?"
-    ).run(amount, target.id);
+    for (const item of poolData) {
+      const percent = ((item.chance * luck) / total * 100).toFixed(5);
+      msg += `${item.cmd.replace("give {player} ","")} → ${percent}%\n`;
+    }
 
-    return i.reply(`✅ Set spins to ${amount}`);
+    return i.reply(msg);
   }
 
   // =====================
-  // SET MESSAGES (ADMIN)
+  // ROLL
   // =====================
-  if (i.commandName === "setmessages") {
-    if (!i.member.permissions.has("Administrator"))
-      return i.reply({ content: "❌ Admin only", ephemeral: true });
+  if (i.commandName === "roll") {
+    if (user.spins <= 0) return i.reply("❌ No spins");
 
-    const target = i.options.getUser("user");
-    const amount = i.options.getInteger("amount");
+    await pool.query(
+      "UPDATE users SET spins = spins - 1 WHERE discord_id = $1",
+      [id]
+    );
 
-    getUser(target.id);
+    await i.reply("🎰 spinning...");
 
-    db.prepare(
-      "UPDATE users SET messages=? WHERE discord_id=?"
-    ).run(amount, target.id);
+    const luck = user.luck_multi || 1;
 
-    return i.reply(`✅ Set messages to ${amount}`);
+    const adjusted = config.reward.pool.map(p => ({
+      ...p,
+      chance: p.chance * luck
+    }));
+
+    let total = adjusted.reduce((a,b)=>a+b.chance,0);
+    let r = Math.random() * total;
+
+    let reward;
+    for (const item of adjusted) {
+      if (r < item.chance) {
+        reward = item;
+        break;
+      }
+      r -= item.chance;
+    }
+
+    const cmd = reward.cmd.replace("{player}", user.mc_username || "player");
+
+    return i.editReply(`🎉 ${cmd}`);
   }
 });
 
-// =====================
-// LOGIN
-// =====================
 client.login(process.env.TOKEN);
