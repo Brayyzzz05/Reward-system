@@ -9,17 +9,17 @@ export default {
     adminLuckMultiplier: 100,
 
     pool: [
-      // 🌿 COMMON (BUFFED STACKS)
+      // 🌿 COMMON
       { cmd: "give {player} oak_log 64", chance: 300000 },
       { cmd: "give {player} bread 64", chance: 280000 },
       { cmd: "give {player} coal 64", chance: 260000 },
       { cmd: "give {player} iron_ingot 64", chance: 240000 },
 
-      // 🪙 UNCOMMON (BUFFED)
+      // 🪙 UNCOMMON
       { cmd: "give {player} gold_ingot 32", chance: 90000 },
       { cmd: "give {player} emerald 32", chance: 60000 },
 
-      // 💎 RARE (BUFFED)
+      // 💎 RARE
       { cmd: "give {player} diamond 16", chance: 15000 },
       { cmd: "give {player} breeze_rod 16", chance: 12000 },
       { cmd: "give {player} golden_apple 16", chance: 10000 },
@@ -42,19 +42,17 @@ export default {
     ]
   },
 
-  // ⏱️ MESSAGE SYSTEM (UPDATED COOLDOWN)
   cooldowns: {
     message: 5
   },
 
-  // 🧠 GUARANTEE SYSTEM (UNCHANGED)
   guaranteedRewards: {
-    guaranteedCommonPlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedUncommonPlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedRarePlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedVeryRarePlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedMythicPlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedUltraPlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" },
-    guaranteedJackpotPlus: { enabled: false, discordId: "PUT_DISCORD_ID_HERE" }
+    guaranteedCommonPlus: { enabled: false, discordId: "" },
+    guaranteedUncommonPlus: { enabled: false, discordId: "" },
+    guaranteedRarePlus: { enabled: false, discordId: "" },
+    guaranteedVeryRarePlus: { enabled: false, discordId: "" },
+    guaranteedMythicPlus: { enabled: false, discordId: "" },
+    guaranteedUltraPlus: { enabled: false, discordId: "" },
+    guaranteedJackpotPlus: { enabled: false, discordId: "" }
   }
 };
