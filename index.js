@@ -4,10 +4,7 @@ import {
   GatewayIntentBits,
   REST,
   Routes,
-  SlashCommandBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
+  SlashCommandBuilder
 } from "discord.js";
 
 import pool from "./database.js";
@@ -30,7 +27,7 @@ const client = new Client({
 const guaranteeMap = new Map();
 
 // =====================
-// DB WRAPPER
+// DB SAFE WRAPPER
 // =====================
 async function db(q, p = []) {
   for (let i = 0; i < 3; i++) {
@@ -54,16 +51,12 @@ async function getUser(id) {
     ON CONFLICT (discord_id) DO NOTHING
   `, [id]);
 
-  const r = await db(
-    "SELECT * FROM users WHERE discord_id=$1",
-    [id]
-  );
-
+  const r = await db("SELECT * FROM users WHERE discord_id=$1", [id]);
   return r.rows[0];
 }
 
 // =====================
-// MESSAGE CURRENCY TRACKER
+// MESSAGE TRACKER (CURRENCY)
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -83,7 +76,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("stats")
-    .setDescription("View your stats"),
+    .setDescription("View stats"),
 
   new SlashCommandBuilder()
     .setName("roll")
@@ -91,56 +84,65 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("daily")
-    .setDescription("Claim daily rewards"),
+    .setDescription("Daily reward"),
 
   new SlashCommandBuilder()
     .setName("odds")
-    .setDescription("View drop chances"),
+    .setDescription("View chances"),
 
   new SlashCommandBuilder()
     .setName("shop")
-    .setDescription("Open shop"),
+    .setDescription("Shop info"),
+
+  new SlashCommandBuilder()
+    .setName("buy")
+    .setDescription("Buy items")
+    .addStringOption(o =>
+      o.setName("item")
+        .setDescription("spin or luck")
+        .setRequired(true))
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("amount")
+        .setRequired(true)),
 
   // ADMIN
   new SlashCommandBuilder()
     .setName("setspins")
-    .setDescription("Admin: set spins")
+    .setDescription("Admin set spins")
     .addUserOption(o =>
       o.setName("user").setDescription("user").setRequired(true))
     .addIntegerOption(o =>
-      o.setName("amount").setDescription("spins").setRequired(true)),
+      o.setName("amount").setDescription("amount").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("setmessages")
-    .setDescription("Admin: set messages")
+    .setDescription("Admin set messages")
     .addUserOption(o =>
       o.setName("user").setDescription("user").setRequired(true))
     .addIntegerOption(o =>
-      o.setName("amount").setDescription("messages").setRequired(true)),
+      o.setName("amount").setDescription("amount").setRequired(true)),
 
   new SlashCommandBuilder()
     .setName("setluck")
-    .setDescription("Admin: set luck multiplier")
+    .setDescription("Admin set luck")
     .addUserOption(o =>
       o.setName("user").setDescription("user").setRequired(true))
     .addNumberOption(o =>
-      o.setName("amount").setDescription("luck").setRequired(true)),
+      o.setName("amount").setDescription("amount").setRequired(true)),
 
-  // =====================
-  // GUARANTEE SYSTEM
-  // =====================
   new SlashCommandBuilder()
     .setName("setguarantee")
-    .setDescription("Admin: set guaranteed rarity for a user")
+    .setDescription("Admin set rarity guarantee")
     .addUserOption(o =>
-      o.setName("user").setDescription("target user").setRequired(true))
+      o.setName("user").setDescription("user").setRequired(true))
     .addStringOption(o =>
       o.setName("rarity")
-        .setDescription("common / rare / epic / legendary / jackpot")
+        .setDescription("common rare epic legendary jackpot")
         .setRequired(true))
     .addBooleanOption(o =>
       o.setName("state")
-        .setDescription("enable or disable")
+        .setDescription("true or false")
         .setRequired(true))
 
 ].map(c => c.toJSON());
@@ -159,8 +161,7 @@ client.once("ready", async () => {
     { body: commands }
   );
 
-  console.log("✅ Commands ready");
-  console.log(`🤖 Logged in as ${client.user.tag}`);
+  console.log("✅ Bot ready");
 });
 
 // =====================
@@ -175,11 +176,12 @@ const reply = (i, msg) => {
 // =====================
 client.on("interactionCreate", async (i) => {
   try {
-
     if (!i.isChatInputCommand()) return;
 
     const id = i.user.id;
     const u = await getUser(id);
+
+    const isAdmin = i.memberPermissions?.has("Administrator");
 
     // =====================
     // STATS
@@ -215,19 +217,59 @@ client.on("interactionCreate", async (i) => {
     // SHOP
     // =====================
     if (i.commandName === "shop") {
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("buy_spin")
-          .setLabel("Buy Spin (20 msgs)")
-          .setStyle(ButtonStyle.Primary),
+      return reply(i,
+`🛒 SHOP
 
-        new ButtonBuilder()
-          .setCustomId("buy_luck")
-          .setLabel("Buy Luck (100 msgs)")
-          .setStyle(ButtonStyle.Success)
+🎟 spin x1 = 20 msgs
+🎟 spin x5 = 80 msgs
+
+🍀 luck x1 = 100 msgs
+🍀 luck x5 = 500 msgs
+
+Use /buy item amount`
       );
+    }
 
-      return reply(i, { content: "🛒 Shop", components: [row] });
+    // =====================
+    // BUY SYSTEM
+    // =====================
+    if (i.commandName === "buy") {
+      const item = i.options.getString("item");
+      const amount = i.options.getInteger("amount");
+
+      if (item === "spin") {
+        const cost = amount >= 5 ? 80 : 20 * amount;
+
+        if (u.messages < cost)
+          return reply(i, "❌ not enough messages");
+
+        await db(`
+          UPDATE users
+          SET spins = spins + $1,
+              messages = messages - $2
+          WHERE discord_id=$3
+        `, [amount, cost, id]);
+
+        return reply(i, `🎟 bought ${amount} spins`);
+      }
+
+      if (item === "luck") {
+        const cost = amount >= 5 ? 500 : 100 * amount;
+
+        if (u.messages < cost)
+          return reply(i, "❌ not enough messages");
+
+        await db(`
+          UPDATE users
+          SET luck_multi = luck_multi + $1,
+              messages = messages - $2
+          WHERE discord_id=$3
+        `, [amount, cost, id]);
+
+        return reply(i, `🍀 bought ${amount} luck`);
+      }
+
+      return reply(i, "❌ invalid item");
     }
 
     // =====================
@@ -237,7 +279,7 @@ client.on("interactionCreate", async (i) => {
       const pool = config.reward.pool;
       const total = pool.reduce((a,b)=>a+b.chance,0);
 
-      let msg = "📊 Odds:\n\n";
+      let msg = "📊 Odds\n\n";
 
       for (const p of pool) {
         msg += `${p.cmd} → ${((p.chance/total)*100).toFixed(4)}%\n`;
@@ -247,7 +289,7 @@ client.on("interactionCreate", async (i) => {
     }
 
     // =====================
-    // ROLL (WITH GUARANTEE SYSTEM)
+    // ROLL + GUARANTEE
     // =====================
     if (i.commandName === "roll") {
 
@@ -261,7 +303,6 @@ client.on("interactionCreate", async (i) => {
       let result;
 
       if (g?.active) {
-
         const pool = config.reward.pool;
         const match = pool.filter(p => p.rarity === g.rarity);
 
@@ -270,9 +311,7 @@ client.on("interactionCreate", async (i) => {
           : pool[0];
 
         guaranteeMap.delete(id);
-
       } else {
-
         const pool = config.reward.pool;
         let total = pool.reduce((a,b)=>a+b.chance,0);
         let r = Math.random() * total;
@@ -291,7 +330,7 @@ client.on("interactionCreate", async (i) => {
       await i.reply("🎰 spinning...");
 
       for (const f of frames) {
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 350));
         await i.editReply(`${f} spinning...`);
       }
 
@@ -299,22 +338,26 @@ client.on("interactionCreate", async (i) => {
     }
 
     // =====================
-    // ADMIN CHECK
+    // ADMIN ONLY
     // =====================
-    const ADMIN = process.env.ADMIN_ID;
-    if (id !== ADMIN &&
-        ["setspins","setmessages","setluck","setguarantee"].includes(i.commandName)) {
-      return reply(i, "❌ no permission");
+    if (!isAdmin &&
+      ["setspins","setmessages","setluck","setguarantee"].includes(i.commandName)) {
+      return reply(i, "❌ admin only");
     }
 
     // =====================
-    // ADMIN: SET GUARANTEE
+    // SET GUARANTEE
     // =====================
     if (i.commandName === "setguarantee") {
 
       const target = i.options.getUser("user").id;
       const rarity = i.options.getString("rarity").toLowerCase();
       const state = i.options.getBoolean("state");
+
+      const valid = ["common","rare","epic","legendary","jackpot"];
+
+      if (!valid.includes(rarity))
+        return i.reply({ content: "❌ invalid rarity", ephemeral: true });
 
       if (!state) {
         guaranteeMap.delete(target);
@@ -324,7 +367,7 @@ client.on("interactionCreate", async (i) => {
       guaranteeMap.set(target, { rarity, active: true });
 
       return i.reply({
-        content: `✅ ${rarity} guaranteed`,
+        content: `🎯 guaranteed: ${rarity}`,
         ephemeral: true
       });
     }
@@ -354,7 +397,7 @@ client.on("interactionCreate", async (i) => {
     }
 
   } catch (e) {
-    console.error("interaction error:", e);
+    console.error(e);
   }
 });
 
