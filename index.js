@@ -12,27 +12,22 @@ import config from "./config.js";
 import { Rcon } from "rcon-client";
 
 // =====================
-// ⚠️ ENV CHECK
+// ENV CHECK
 // =====================
-if (!process.env.TOKEN) {
-  console.error("❌ Missing TOKEN");
-  process.exit(1);
-}
-
-if (!process.env.CLIENT_ID) {
-  console.error("❌ Missing CLIENT_ID");
+if (!process.env.TOKEN || !process.env.CLIENT_ID) {
+  console.error("❌ Missing TOKEN or CLIENT_ID");
   process.exit(1);
 }
 
 // =====================
-// 🤖 CLIENT
+// CLIENT
 // =====================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
 });
 
 // =====================
-// 🔌 SAFE RCON
+// RCON SAFE CONNECT
 // =====================
 let rcon = null;
 
@@ -54,7 +49,7 @@ connectRcon();
 setInterval(connectRcon, 10000);
 
 // =====================
-// 🛡️ SAFE SEND
+// SAFE SEND
 // =====================
 async function safeSend(cmd) {
   if (!rcon) return false;
@@ -67,7 +62,7 @@ async function safeSend(cmd) {
 }
 
 // =====================
-// 🎲 REWARD SYSTEM
+// REWARD SYSTEM
 // =====================
 function getReward(pool) {
   const total = pool.reduce((a, b) => a + b.chance, 0);
@@ -80,15 +75,15 @@ function getReward(pool) {
 }
 
 // =====================
-// 📦 COMMANDS
+// COMMANDS
 // =====================
 const commands = [
   new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link your Minecraft account")
+    .setDescription("Link your Minecraft username")
     .addStringOption(opt =>
       opt.setName("username")
-        .setDescription("Minecraft username")
+        .setDescription("Your Minecraft username")
         .setRequired(true)
     ),
 
@@ -124,7 +119,7 @@ const commands = [
 ].map(c => c.toJSON());
 
 // =====================
-// 🚀 REGISTER GLOBAL COMMANDS
+// REGISTER GLOBAL COMMANDS
 // =====================
 client.once("ready", async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
@@ -137,14 +132,14 @@ client.once("ready", async () => {
       { body: commands }
     );
 
-    console.log("🌍 Global slash commands registered");
+    console.log("🌍 Commands registered");
   } catch (err) {
-    console.error("❌ Command registration failed:", err);
+    console.error("❌ Register error:", err);
   }
 });
 
 // =====================
-// 🎮 COMMAND HANDLER
+// COMMAND HANDLER
 // =====================
 client.on("interactionCreate", async (i) => {
   if (!i.isChatInputCommand()) return;
@@ -164,7 +159,9 @@ client.on("interactionCreate", async (i) => {
       .get(id);
   }
 
-  // 🔐 VERIFY
+  // =====================
+  // VERIFY (DISCORD ONLY)
+  // =====================
   if (i.commandName === "verify") {
     const username = i.options.getString("username");
 
@@ -172,10 +169,12 @@ client.on("interactionCreate", async (i) => {
       UPDATE users SET mc_username = ? WHERE discord_id = ?
     `).run(username, id);
 
-    return i.reply(`✅ Linked to ${username}`);
+    return i.reply(`✅ Linked to Minecraft username: ${username}`);
   }
 
-  // 🎰 ROLL
+  // =====================
+  // ROLL
+  // =====================
   if (i.commandName === "roll") {
 
     if (!user.mc_username)
@@ -189,13 +188,11 @@ client.on("interactionCreate", async (i) => {
 
     const roll = Math.random();
 
-    // 💥 JACKPOT
     if (roll < 0.000000001) {
       await safeSend(`give ${user.mc_username} netherite_block 1`);
       return i.reply("💥 JACKPOT!!!");
     }
 
-    // 🪽 ELYTRA
     if (roll < 0.00001) {
       await safeSend(`give ${user.mc_username} elytra 1`);
       return i.reply("🪽 YOU WON AN ELYTRA!");
@@ -209,7 +206,9 @@ client.on("interactionCreate", async (i) => {
     return i.reply(`🎰 You received: \`${cmd}\``);
   }
 
-  // 🎁 DAILY
+  // =====================
+  // DAILY
+  // =====================
   if (i.commandName === "daily") {
 
     const now = Date.now();
@@ -234,12 +233,16 @@ client.on("interactionCreate", async (i) => {
     return i.reply(`🎁 +${reward} spins | 🔥 ${streak}`);
   }
 
-  // 📊 STATS
+  // =====================
+  // STATS
+  // =====================
   if (i.commandName === "stats") {
     return i.reply(`🎰 Spins: ${user.spins}\n🔥 Streak: ${user.streak}`);
   }
 
-  // 🏆 LEADERBOARD
+  // =====================
+  // LEADERBOARD
+  // =====================
   if (i.commandName === "leaderboard") {
     const rows = db.prepare(`
       SELECT mc_username, spins FROM users ORDER BY spins DESC LIMIT 10
@@ -250,7 +253,9 @@ client.on("interactionCreate", async (i) => {
     );
   }
 
-  // 🛠️ ADMIN
+  // =====================
+  // ADMIN
+  // =====================
   if (i.commandName === "givespins") {
 
     if (!i.member.permissions.has("Administrator"))
@@ -266,5 +271,4 @@ client.on("interactionCreate", async (i) => {
   }
 });
 
-// =====================
 client.login(process.env.TOKEN);
