@@ -22,11 +22,6 @@ const client = new Client({
 });
 
 // =====================
-// GUARANTEE SYSTEM
-// =====================
-const guaranteeMap = new Map();
-
-// =====================
 // DB WRAPPER
 // =====================
 async function db(q, p = []) {
@@ -57,7 +52,7 @@ async function getUser(id) {
 }
 
 // =====================
-// MESSAGE CURRENCY TRACKER
+// MESSAGE TRACKER
 // =====================
 client.on("messageCreate", async (m) => {
   if (!m.guild || m.author.bot) return;
@@ -71,19 +66,19 @@ client.on("messageCreate", async (m) => {
 });
 
 // =====================
-// COMMANDS BUILDER (SAFE)
+// COMMANDS
 // =====================
 const commands = [];
-
 const add = (cmd) => commands.push(cmd.toJSON());
 
-// USER COMMANDS
+// USER
 add(new SlashCommandBuilder().setName("stats").setDescription("View stats"));
 add(new SlashCommandBuilder().setName("roll").setDescription("Spin rewards"));
 add(new SlashCommandBuilder().setName("daily").setDescription("Daily reward"));
 add(new SlashCommandBuilder().setName("shop").setDescription("Shop"));
 add(new SlashCommandBuilder().setName("odds").setDescription("View odds"));
 
+// BUY
 add(
   new SlashCommandBuilder()
     .setName("buy")
@@ -125,22 +120,8 @@ add(
       o.setName("amount").setDescription("amount").setRequired(true))
 );
 
-add(
-  new SlashCommandBuilder()
-    .setName("rarityset")
-    .setDescription("Admin rarity control")
-    .addUserOption(o =>
-      o.setName("user").setDescription("user").setRequired(true))
-    .addStringOption(o =>
-      o.setName("rarity")
-        .setDescription("common rare epic legendary jackpot")
-        .setRequired(true))
-    .addBooleanOption(o =>
-      o.setName("state").setDescription("true or false").setRequired(true))
-);
-
 // =====================
-// SAFE COMMAND REGISTRATION
+// REGISTER COMMANDS
 // =====================
 const registerCommands = async () => {
   const rest = new REST({ version: "10" }).setToken(process.env.TOKEN);
@@ -157,17 +138,14 @@ const registerCommands = async () => {
 };
 
 // =====================
-// FUTURE SAFE READY HANDLER (FIX)
+// READY (FIXED FUTURE SAFE)
 // =====================
 const onReady = async () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
   await registerCommands();
 };
 
-// v14 safe
 client.once("ready", onReady);
-
-// future v15 safe (prevents warning)
 client.once("clientReady", onReady);
 
 // =====================
@@ -261,7 +239,7 @@ Use /buy`
     }
 
     // =====================
-    // DAILY
+    // DAILY (24h COOLDOWN)
     // =====================
     if (i.commandName === "daily") {
       const now = Date.now();
@@ -305,31 +283,18 @@ Use /buy`
 
       await db("UPDATE users SET spins = spins - 1 WHERE discord_id=$1", [id]);
 
-      const g = guaranteeMap.get(id);
+      const pool = config.reward.pool;
+      let total = pool.reduce((a,b)=>a+b.chance,0);
+      let r = Math.random() * total;
 
       let result;
 
-      if (g?.active) {
-        const pool = config.reward.pool;
-        const match = pool.filter(p => p.rarity === g.rarity);
-
-        result = match.length
-          ? match[Math.floor(Math.random() * match.length)]
-          : pool[0];
-
-        guaranteeMap.delete(id);
-      } else {
-        const pool = config.reward.pool;
-        let total = pool.reduce((a,b)=>a+b.chance,0);
-        let r = Math.random() * total;
-
-        for (const p of pool) {
-          if (r < p.chance) {
-            result = p;
-            break;
-          }
-          r -= p.chance;
+      for (const p of pool) {
+        if (r < p.chance) {
+          result = p;
+          break;
         }
+        r -= p.chance;
       }
 
       await i.reply("🎰 spinning...");
@@ -342,35 +307,8 @@ Use /buy`
     // ADMIN CHECK
     // =====================
     if (!isAdmin &&
-      ["setspins","setmessages","setluck","rarityset"].includes(i.commandName)) {
+      ["setspins","setmessages","setluck"].includes(i.commandName)) {
       return reply(i, "❌ admin only");
-    }
-
-    // =====================
-    // RARITY SET
-    // =====================
-    if (i.commandName === "rarityset") {
-
-      const target = i.options.getUser("user").id;
-      const rarity = i.options.getString("rarity").toLowerCase();
-      const state = i.options.getBoolean("state");
-
-      const valid = ["common","rare","epic","legendary","jackpot"];
-
-      if (!valid.includes(rarity))
-        return i.reply({ content: "❌ invalid rarity", ephemeral: true });
-
-      if (!state) {
-        guaranteeMap.delete(target);
-        return i.reply({ content: "🧹 removed", ephemeral: true });
-      }
-
-      guaranteeMap.set(target, { rarity, active: true });
-
-      return i.reply({
-        content: `🎯 set ${rarity}`,
-        ephemeral: true
-      });
     }
 
     // =====================
