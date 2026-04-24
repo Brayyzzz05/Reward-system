@@ -10,7 +10,7 @@ export default {
 
     guaranteedUltra: {
       enabled: true,
-      discordId: "REPLACE_WITH_YOUR_DISCORD_ID"
+      discordId: "1274645481217327108"
     },
 
     pool: [
