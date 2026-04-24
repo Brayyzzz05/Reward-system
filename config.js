@@ -1,42 +1,33 @@
 export default {
   reward: {
-    messagesRequired: 20,
-
-    luckyUsers: {
-      brayyzzz: 3
-    },
-
-    adminLuckMultiplier: 100,
-
     pool: [
-      // 🌿 COMMON
+      // COMMON
       { cmd: "give {player} oak_log 64", chance: 300000 },
       { cmd: "give {player} bread 64", chance: 280000 },
       { cmd: "give {player} coal 64", chance: 260000 },
       { cmd: "give {player} iron_ingot 64", chance: 240000 },
 
-      // 🪙 UNCOMMON
+      // UNCOMMON
       { cmd: "give {player} gold_ingot 32", chance: 90000 },
       { cmd: "give {player} emerald 32", chance: 60000 },
 
-      // 💎 RARE
+      // RARE
       { cmd: "give {player} diamond 16", chance: 15000 },
       { cmd: "give {player} breeze_rod 16", chance: 12000 },
       { cmd: "give {player} golden_apple 16", chance: 10000 },
 
-      // 🔥 VERY RARE
+      // VERY RARE
       { cmd: "give {player} netherite_ingot 1", chance: 2000 },
-      { cmd: "give {player} netherite_upgrade_smithing_template 1", chance: 1000 },
 
-      // 💀 MYTHIC
+      // MYTHIC
       { cmd: "give {player} enchanted_golden_apple 1", chance: 200 },
 
-      // 🌟 ULTRA RARE
+      // ULTRA
       { cmd: "give {player} elytra 1", chance: 50 },
 
-      // 👑 JACKPOT
+      // JACKPOT
       {
-        cmd: "give {player} minecraft:beacon 4 && give {player} minecraft:netherite_block 1 && give {player} minecraft:diamond_block 12 && give {player} minecraft:gold_block 16 && give {player} minecraft:iron_block 32 && give {player} minecraft:mace{Enchantments:[{id:\"wind_burst\",lvl:1},{id:\"density\",lvl:5},{id:\"unbreaking\",lvl:3},{id:\"mending\",lvl:1}]} 1",
+        cmd: "give {player} minecraft:beacon 4 && give {player} minecraft:netherite_block 1 && give {player} minecraft:diamond_block 12 && give {player} minecraft:gold_block 16 && give {player} minecraft:iron_block 32",
         chance: 10
       }
     ]
@@ -47,12 +38,12 @@ export default {
   },
 
   guaranteedRewards: {
-    guaranteedCommonPlus: { enabled: false, discordId: "" },
-    guaranteedUncommonPlus: { enabled: false, discordId: "" },
-    guaranteedRarePlus: { enabled: false, discordId: "" },
-    guaranteedVeryRarePlus: { enabled: false, discordId: "" },
-    guaranteedMythicPlus: { enabled: false, discordId: "" },
-    guaranteedUltraPlus: { enabled: false, discordId: "" },
-    guaranteedJackpotPlus: { enabled: false, discordId: "" }
+    guaranteedCommonPlus: { enabled: false },
+    guaranteedUncommonPlus: { enabled: false },
+    guaranteedRarePlus: { enabled: false },
+    guaranteedVeryRarePlus: { enabled: false },
+    guaranteedMythicPlus: { enabled: false },
+    guaranteedUltraPlus: { enabled: false },
+    guaranteedJackpotPlus: { enabled: false }
   }
 };
