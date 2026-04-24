@@ -1,16 +1,17 @@
 import Database from "better-sqlite3";
 
-const db = new Database("database.db");
+const db = new Database(process.env.DATABASE_PATH || "./data.db");
 
-db.exec(`
+db.prepare(`
 CREATE TABLE IF NOT EXISTS users (
   discord_id TEXT PRIMARY KEY,
-  mc_username TEXT,
+  mc_username TEXT DEFAULT NULL,
   spins INTEGER DEFAULT 0,
   messages INTEGER DEFAULT 0,
+  luck_multi REAL DEFAULT 1,
   last_message INTEGER DEFAULT 0,
-  luck_multi REAL DEFAULT 1
-);
-`);
+  last_daily INTEGER DEFAULT 0
+)
+`).run();
 
 export default db;
