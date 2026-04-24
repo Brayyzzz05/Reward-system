@@ -3,46 +3,56 @@ import pool from "./database.js";
 import { runCommand } from "./rconHandler.js";
 
 // =====================
-// HASH
+// HASH (ANTI DUPE)
 // =====================
-function hash(id, cmd) {
-  return crypto.createHash("sha256").update(id + cmd).digest("hex");
+function makeHash(discordId, cmd) {
+  return crypto
+    .createHash("sha256")
+    .update(discordId + cmd)
+    .digest("hex");
 }
 
 // =====================
-// GIVE REWARD
+// GIVE OR QUEUE
 // =====================
 export async function deliverReward(discordId, mcName, cmd) {
-  const final = cmd.replace("{player}", mcName);
-  const h = hash(discordId, final);
+  const finalCmd = cmd.replace("{player}", mcName);
+  const hash = makeHash(discordId, finalCmd);
+
+  // anti-dupe check
+  const check = await pool.query(
+    "SELECT 1 FROM delivered_rewards WHERE reward_hash=$1",
+    [hash]
+  );
+
+  if (check.rows.length > 0) return;
 
   try {
-    const check = await pool.query(
-      "SELECT 1 FROM delivered_rewards WHERE reward_hash=$1",
-      [h]
-    );
-
-    if (check.rows.length) return;
-
-    await runCommand(final);
+    await runCommand(finalCmd);
 
     await pool.query(
       "INSERT INTO delivered_rewards (reward_hash) VALUES ($1)",
-      [h]
+      [hash]
     );
 
-  } catch {
+    console.log("⚡ Delivered:", finalCmd);
+  } catch (err) {
+    // =====================
+    // QUEUE IF OFFLINE
+    // =====================
     await pool.query(
       `INSERT INTO reward_queue
-      (discord_id, minecraft_name, command, status, reward_hash, created_at)
-      VALUES ($1,$2,$3,'pending',$4,$5)`,
-      [discordId, mcName, final, h, Date.now()]
+       (discord_id, minecraft_name, command, status, reward_hash, created_at)
+       VALUES ($1,$2,$3,'pending',$4,$5)`,
+      [discordId, mcName, finalCmd, hash, Date.now()]
     );
+
+    console.log("📦 Queued (RCON offline):", finalCmd);
   }
 }
 
 // =====================
-// WORKER
+// BACKGROUND WORKER
 // =====================
 export function startRewardWorker() {
   setInterval(async () => {
@@ -51,20 +61,22 @@ export function startRewardWorker() {
         "SELECT * FROM reward_queue WHERE status='pending' LIMIT 20"
       );
 
-      for (const r of res.rows) {
+      for (const row of res.rows) {
         try {
-          await runCommand(r.command);
+          await runCommand(row.command);
 
           await pool.query(
             "UPDATE reward_queue SET status='delivered' WHERE id=$1",
-            [r.id]
+            [row.id]
           );
 
-        } catch {}
+          console.log("🔁 Sent queued reward:", row.command);
+        } catch (e) {
+          // still offline → ignore
+        }
       }
-
     } catch (err) {
-      console.error("Worker error:", err);
+      console.log("⚠️ Worker DB error (ignored)");
     }
   }, 5000);
 }
