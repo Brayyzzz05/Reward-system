@@ -1,39 +1,53 @@
+import { SlashCommandBuilder } from "discord.js";
 import { rollReward } from "../systems/rollEngine.js";
 import { getMCName } from "../systems/verifySystem.js";
 
 export default {
-  name: "!roll",
+  data: new SlashCommandBuilder()
+    .setName("roll")
+    .setDescription("Roll your reward"),
 
-  async execute(msg, args) {
+  async execute(interaction) {
     try {
+      const userId = interaction.user.id;
+
       // =====================
       // GET VERIFIED MC NAME
       // =====================
-      const mcName = await getMCName(msg.author.id);
+      const mcName = await getMCName(userId);
 
       if (!mcName) {
-        return msg.reply("❌ You are not verified. Use: !verify <minecraft name>");
+        return interaction.reply({
+          content: "❌ You are not verified. Use /verify <minecraft name>",
+          ephemeral: true
+        });
       }
 
       // =====================
       // RUN ROLL
       // =====================
-      const result = await rollReward(msg.author.id, mcName);
+      const result = await rollReward(userId, mcName);
 
       // =====================
       // RESPONSE
       // =====================
-      return msg.reply(`🎰 You rolled: **${formatReward(result.cmd)}**`);
+      return interaction.reply(
+        `🎰 You rolled: **${formatReward(result.cmd)}**`
+      );
 
     } catch (err) {
       console.error("ROLL ERROR:", err);
-      return msg.reply("⚠️ Roll failed. Try again later.");
+
+      return interaction.reply({
+        content: "⚠️ Roll failed. Try again later.",
+        ephemeral: true
+      });
     }
   }
 };
 
 // =====================
-// SIMPLE FORMATTER
+// FORMATTER
 // =====================
 function formatReward(cmd) {
   if (cmd.includes("netherite")) return "🔥 Mythic Reward";
