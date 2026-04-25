@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import pkg from "pg";
+import { logError, logInfo } from "./utils/logger.js";
 
 dotenv.config();
 
@@ -29,7 +30,7 @@ export const db = new Pool({
 });
 
 db.on("error", (err) => {
-  console.error("🔥 DB ERROR:", err);
+  logError("DATABASE CONNECTION", err);
 });
 
 // =====================
@@ -42,7 +43,7 @@ const client = new Client({
 client.commands = new Collection();
 
 // =====================
-// LOAD COMMANDS (SAFE)
+// LOAD COMMANDS
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
@@ -59,19 +60,17 @@ if (fs.existsSync(commandsPath)) {
       const command = commandModule.default;
 
       if (!command?.data?.name || !command?.execute) {
-        console.log(`⚠️ Skipped invalid command: ${file}`);
+        logInfo(`Skipped invalid command: ${file}`);
         continue;
       }
 
       client.commands.set(command.data.name, command);
-      console.log(`✅ Loaded command: ${command.data.name}`);
+      logInfo(`Loaded command: ${command.data.name}`);
 
     } catch (err) {
-      console.error(`❌ Failed loading ${file}:`, err);
+      logError(`LOADING COMMAND: ${file}`, err);
     }
   }
-} else {
-  console.warn("⚠️ Commands folder not found");
 }
 
 console.log("📦 Commands loaded:", [...client.commands.keys()]);
@@ -84,7 +83,7 @@ client.once("clientReady", () => {
 });
 
 // =====================
-// INTERACTION HANDLER (FIXED CORE)
+// INTERACTION HANDLER (FIXED + SAFE)
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -99,9 +98,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   try {
-    // =====================
-    // FIX: PREVENT TIMEOUTS
-    // =====================
+    // Prevent timeout crash
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
@@ -109,39 +106,39 @@ client.on("interactionCreate", async (interaction) => {
     await command.execute(interaction, { client, db });
 
   } catch (err) {
-    console.error(`🔥 COMMAND ERROR (${interaction.commandName}):`, err);
+    logError(`COMMAND: ${interaction.commandName}`, err);
 
     try {
       if (interaction.deferred) {
-        await interaction.editReply("❌ Command failed. Check bot logs.");
+        await interaction.editReply("❌ Command failed (check logs)");
       } else {
         await interaction.reply({
-          content: "❌ Command failed.",
+          content: "❌ Command failed",
           ephemeral: true
         });
       }
     } catch (e) {
-      console.error("❌ Failed to send error reply:", e);
+      logError("FAILED ERROR RESPONSE", e);
     }
   }
 });
 
 // =====================
-// OPTIONAL MESSAGE EVENT
+// MESSAGE EVENT (OPTIONAL)
 // =====================
 client.on("messageCreate", (msg) => {
   if (msg.author.bot) return;
 });
 
 // =====================
-// GLOBAL ERROR HANDLING
+// GLOBAL ERROR HANDLING (RAILWAY SAFE)
 // =====================
 process.on("unhandledRejection", (err) => {
-  console.error("🔥 UNHANDLED REJECTION:", err);
+  logError("UNHANDLED REJECTION", err);
 });
 
 process.on("uncaughtException", (err) => {
-  console.error("🔥 UNCAUGHT EXCEPTION:", err);
+  logError("UNCAUGHT EXCEPTION", err);
 });
 
 // =====================
@@ -149,6 +146,7 @@ process.on("uncaughtException", (err) => {
 // =====================
 client.login(process.env.DISCORD_TOKEN)
   .then(() => console.log("🟢 Bot logged in"))
-  .catch(err => {
-    console.error("❌ Login failed:", err);
+  .catch((err) => {
+    logError("LOGIN FAILED", err);
+    process.exit(1);
   });
