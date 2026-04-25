@@ -14,15 +14,11 @@ const { Pool } = pkg;
 console.log("🚀 Starting bot...");
 
 // =====================
-// ENV CHECKS
+// ENV CHECK
 // =====================
 if (!process.env.DISCORD_TOKEN) {
   console.error("❌ DISCORD_TOKEN is missing!");
   process.exit(1);
-}
-
-if (!process.env.DATABASE_URL) {
-  console.warn("⚠️ DATABASE_URL is missing (DB disabled)");
 }
 
 // =====================
@@ -49,12 +45,12 @@ const client = new Client({
 client.commands = new Collection();
 
 // =====================
-// LOAD COMMANDS
+// LOAD COMMANDS (FIXED)
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
 if (!fs.existsSync(commandsPath)) {
-  console.warn("⚠️ No commands folder found!");
+  console.warn("⚠️ Commands folder not found!");
 } else {
   const commandFiles = fs
     .readdirSync(commandsPath)
@@ -62,19 +58,25 @@ if (!fs.existsSync(commandsPath)) {
 
   for (const file of commandFiles) {
     try {
-      const filePath = `./commands/${file}`;
-      const command = await import(filePath);
+      const filePath = path.resolve(commandsPath, file);
+      const commandModule = await import(`file://${filePath}`);
 
-      if (command.default?.data?.name) {
-        client.commands.set(command.default.data.name, command.default);
-        console.log(`✅ Loaded: ${command.default.data.name}`);
-      } else {
-        console.warn(`⚠️ Skipped invalid command: ${file}`);
+      const command = commandModule.default;
+
+      if (!command?.data?.name || !command?.execute) {
+        console.warn(`⚠️ Invalid command skipped: ${file}`);
+        continue;
       }
+
+      client.commands.set(command.data.name, command);
+      console.log(`✅ Loaded command: ${command.data.name}`);
+
     } catch (err) {
-      console.error(`❌ Failed loading ${file}:`, err);
+      console.error(`❌ Failed to load ${file}:`, err);
     }
   }
+
+  console.log("📦 Commands loaded:", [...client.commands.keys()]);
 }
 
 // =====================
@@ -85,7 +87,7 @@ client.once("clientReady", () => {
 });
 
 // =====================
-// SLASH COMMAND HANDLER
+// INTERACTION HANDLER (FIXED)
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -93,6 +95,8 @@ client.on("interactionCreate", async (interaction) => {
   const command = client.commands.get(interaction.commandName);
 
   if (!command) {
+    console.log("❌ Command not found:", interaction.commandName);
+
     return interaction.reply({
       content: "❌ Command not found",
       ephemeral: true
@@ -102,23 +106,23 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await command.execute(interaction, { client, db });
   } catch (err) {
-    console.error(`❌ Command error (${interaction.commandName}):`, err);
+    console.error(`❌ Error in ${interaction.commandName}:`, err);
 
-    const reply = {
+    const msg = {
       content: "❌ Something went wrong.",
       ephemeral: true
     };
 
     if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(reply);
+      await interaction.followUp(msg);
     } else {
-      await interaction.reply(reply);
+      await interaction.reply(msg);
     }
   }
 });
 
 // =====================
-// MESSAGE EVENT (OPTIONAL)
+// OPTIONAL MESSAGE EVENT
 // =====================
 client.on("messageCreate", (msg) => {
   if (msg.author.bot) return;
@@ -136,7 +140,7 @@ process.on("uncaughtException", (err) => {
 });
 
 // =====================
-// LOGIN BOT
+// LOGIN
 // =====================
 client.login(process.env.DISCORD_TOKEN).catch((err) => {
   console.error("❌ Login failed:", err);
