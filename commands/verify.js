@@ -1,49 +1,40 @@
-import { SlashCommandBuilder } from "discord.js";
+import { db } from "../index.js";
 
-export default {
-  data: new SlashCommandBuilder()
-    .setName("verify")
-    .setDescription("Link your Minecraft account")
-    .addStringOption(option =>
-      option
-        .setName("username")
-        .setDescription("Minecraft username")
-        .setRequired(true)
-    ),
+// =====================
+// GET MC NAME
+// =====================
+export async function getMCName(discordId) {
+  try {
+    const res = await db.query(
+      "SELECT minecraft_username FROM mc_verifications WHERE discord_id = $1",
+      [discordId]
+    );
 
-  async execute(interaction, { db }) {
-    const mcName = interaction.options.getString("username");
+    return res.rows[0]?.minecraft_username || null;
 
-    try {
-      const existing = await db.query(
-        "SELECT * FROM verifications WHERE discord_id = $1",
-        [interaction.user.id]
-      );
-
-      if (existing.rows.length > 0) {
-        return interaction.reply({
-          content: `❌ Already linked to ${existing.rows[0].minecraft_username}`,
-          ephemeral: true
-        });
-      }
-
-      await db.query(
-        "INSERT INTO verifications (discord_id, minecraft_username) VALUES ($1, $2)",
-        [interaction.user.id, mcName]
-      );
-
-      return interaction.reply({
-        content: `✅ Linked to ${mcName}`,
-        ephemeral: true
-      });
-
-    } catch (err) {
-      console.error("VERIFY ERROR:", err);
-
-      return interaction.reply({
-        content: "❌ Failed to link account",
-        ephemeral: true
-      });
-    }
+  } catch (err) {
+    console.error("VERIFY SYSTEM ERROR:", err);
+    return null;
   }
-};
+}
+
+// =====================
+// LINK ACCOUNT
+// =====================
+export async function linkMC(discordId, mcName) {
+  try {
+    await db.query(
+      `INSERT INTO mc_verifications (discord_id, minecraft_username)
+       VALUES ($1, $2)
+       ON CONFLICT (discord_id)
+       DO UPDATE SET minecraft_username = EXCLUDED.minecraft_username`,
+      [discordId, mcName]
+    );
+
+    return true;
+
+  } catch (err) {
+    console.error("LINK ERROR:", err);
+    return false;
+  }
+}
