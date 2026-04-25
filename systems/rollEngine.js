@@ -1,38 +1,34 @@
 import config from "../config.js";
-import { deliverReward } from "./rewardSystem.js";
+import { logError } from "../utils/logger.js";
 
 // =====================
-// MAIN ROLL ENGINE
+// WEIGHTED ROLL
 // =====================
-export async function rollReward(discordId, mcName) {
-  const pool = config.reward.pool;
+export async function rollReward(userId, mcName) {
+  try {
+    const pool = config.reward.pool;
 
-  // 1. total weight
-  const totalWeight = pool.reduce((sum, item) => sum + item.chance, 0);
+    const totalWeight = pool.reduce((sum, r) => sum + r.chance, 0);
 
-  // 2. random roll
-  let roll = Math.random() * totalWeight;
+    let roll = Math.random() * totalWeight;
 
-  let selected = pool[0];
+    for (const reward of pool) {
+      roll -= reward.chance;
 
-  // 3. weighted selection
-  for (const item of pool) {
-    if (roll < item.chance) {
-      selected = item;
-      break;
+      if (roll <= 0) {
+        return {
+          cmd: reward.cmd.replaceAll("{player}", mcName)
+        };
+      }
     }
-    roll -= item.chance;
+
+    // fallback (should never hit)
+    return {
+      cmd: pool[0].cmd.replaceAll("{player}", mcName)
+    };
+
+  } catch (err) {
+    logError("rollReward()", err);
+    throw err;
   }
-
-  // 4. handle multi-command or single command
-  const commands = Array.isArray(selected.cmd)
-    ? selected.cmd
-    : [selected.cmd];
-
-  for (const cmd of commands) {
-    const finalCmd = cmd.replace("{player}", mcName);
-    await deliverReward(discordId, mcName, finalCmd);
-  }
-
-  return selected;
 }
