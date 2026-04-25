@@ -11,7 +11,7 @@ const { Pool } = pkg;
 console.log("🚀 Starting bot...");
 
 // =====================
-// ENV SAFETY CHECK
+// ENV CHECK
 // =====================
 if (!process.env.DISCORD_TOKEN) {
   console.error("❌ Missing DISCORD_TOKEN");
@@ -19,16 +19,15 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 // =====================
-// DATABASE (SAFE INIT)
+// DATABASE
 // =====================
 export const db = new Pool({
-  connectionString: process.env.DATABASE_URL || "",
+  connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
-// Prevent DB crash killing bot
 db.on("error", (err) => {
-  console.error("🔥 DATABASE ERROR:", err);
+  console.error("🔥 DB ERROR:", err);
 });
 
 // =====================
@@ -45,92 +44,66 @@ const client = new Client({
 client.commands = new Collection();
 
 // =====================
-// SAFE COMMAND LOADER
+// LOAD COMMANDS (SAFE)
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
-async function loadCommands() {
-  if (!fs.existsSync(commandsPath)) {
-    console.log("⚠️ No commands folder found");
-    return;
-  }
-
+const loadCommands = async () => {
   const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+  const loaded = new Set();
 
   for (const file of files) {
     try {
       const filePath = path.resolve(commandsPath, file);
       const mod = await import(`file://${filePath}`);
-
       const cmd = mod.default;
 
-      if (!cmd?.data?.name || !cmd?.execute) {
-        console.log(`⚠️ Skipped invalid command: ${file}`);
-        continue;
-      }
+      if (!cmd?.data?.name || !cmd?.execute) continue;
 
+      if (loaded.has(cmd.data.name)) continue;
+
+      loaded.add(cmd.data.name);
       client.commands.set(cmd.data.name, cmd);
-      console.log(`✅ Loaded command: ${cmd.data.name}`);
+
+      console.log(`✅ Loaded: ${cmd.data.name}`);
 
     } catch (err) {
-      console.log(`❌ Failed command: ${file}`);
-      console.error(err);
+      console.error(`❌ Failed: ${file}`, err);
     }
   }
-
-  console.log("📦 Commands loaded:", [...client.commands.keys()]);
-}
+};
 
 // =====================
-// READY EVENT (FIXED)
+// READY
 // =====================
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 // =====================
-// INTERACTION HANDLER
+// INTERACTIONS
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const command = client.commands.get(interaction.commandName);
+  const cmd = client.commands.get(interaction.commandName);
 
-  if (!command) {
-    return interaction.reply({
-      content: "❌ Command not found",
-      ephemeral: true
-    });
+  if (!cmd) {
+    return interaction.reply({ content: "❌ Not found", ephemeral: true });
   }
 
   try {
-    // ALWAYS defer safely
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply();
-    }
-
-    await command.execute(interaction, { client, db });
+    await interaction.deferReply();
+    await cmd.execute(interaction, { db });
 
   } catch (err) {
-    console.error(`❌ COMMAND ERROR (${interaction.commandName})`, err);
-
-    try {
-      if (interaction.deferred) {
-        await interaction.editReply("❌ Command failed. Check logs.");
-      } else {
-        await interaction.reply({
-          content: "❌ Command failed.",
-          ephemeral: true
-        });
-      }
-    } catch (e) {
-      console.error("❌ Failed to send error reply:", e);
-    }
+    console.error("COMMAND ERROR:", err);
+    await interaction.editReply("❌ Command failed");
   }
 });
 
 // =====================
-// MESSAGE TRACKING (SAFE)
+// MESSAGE TRACKING (ECONOMY)
 // =====================
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
@@ -144,34 +117,19 @@ client.on("messageCreate", async (msg) => {
       [msg.author.id]
     );
   } catch (err) {
-    console.error("⚠️ Message tracking error:", err);
+    console.error("MSG TRACK ERROR:", err);
   }
 });
 
 // =====================
-// GLOBAL ERROR SAFETY
-// =====================
-process.on("unhandledRejection", (err) => {
-  console.error("🔥 UNHANDLED REJECTION:", err);
-});
-
-process.on("uncaughtException", (err) => {
-  console.error("💥 UNCAUGHT EXCEPTION:", err);
-});
-
-// =====================
-// START BOT SAFELY
+// START
 // =====================
 (async () => {
   try {
     await loadCommands();
-
     await client.login(process.env.DISCORD_TOKEN);
-
-    console.log("🟢 Bot fully online");
-
+    console.log("🟢 Bot online");
   } catch (err) {
-    console.error("❌ FAILED TO START BOT:", err);
-    process.exit(1);
+    console.error("START ERROR:", err);
   }
 })();
