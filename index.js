@@ -8,16 +8,13 @@ dotenv.config();
 
 const { Pool } = pkg;
 
-// =====================
-// START LOG
-// =====================
 console.log("🚀 Starting bot...");
 
 // =====================
 // ENV CHECK
 // =====================
 if (!process.env.DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is missing!");
+  console.error("❌ Missing DISCORD_TOKEN");
   process.exit(1);
 }
 
@@ -32,11 +29,11 @@ export const db = new Pool({
 });
 
 db.on("error", (err) => {
-  console.error("❌ Database error:", err);
+  console.error("🔥 DB ERROR:", err);
 });
 
 // =====================
-// DISCORD CLIENT
+// CLIENT
 // =====================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -45,13 +42,11 @@ const client = new Client({
 client.commands = new Collection();
 
 // =====================
-// LOAD COMMANDS (FIXED)
+// LOAD COMMANDS (SAFE)
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
-if (!fs.existsSync(commandsPath)) {
-  console.warn("⚠️ Commands folder not found!");
-} else {
+if (fs.existsSync(commandsPath)) {
   const commandFiles = fs
     .readdirSync(commandsPath)
     .filter(file => file.endsWith(".js"));
@@ -64,7 +59,7 @@ if (!fs.existsSync(commandsPath)) {
       const command = commandModule.default;
 
       if (!command?.data?.name || !command?.execute) {
-        console.warn(`⚠️ Invalid command skipped: ${file}`);
+        console.log(`⚠️ Skipped invalid command: ${file}`);
         continue;
       }
 
@@ -72,12 +67,14 @@ if (!fs.existsSync(commandsPath)) {
       console.log(`✅ Loaded command: ${command.data.name}`);
 
     } catch (err) {
-      console.error(`❌ Failed to load ${file}:`, err);
+      console.error(`❌ Failed loading ${file}:`, err);
     }
   }
-
-  console.log("📦 Commands loaded:", [...client.commands.keys()]);
+} else {
+  console.warn("⚠️ Commands folder not found");
 }
+
+console.log("📦 Commands loaded:", [...client.commands.keys()]);
 
 // =====================
 // READY EVENT
@@ -87,7 +84,7 @@ client.once("clientReady", () => {
 });
 
 // =====================
-// INTERACTION HANDLER (FIXED)
+// INTERACTION HANDLER (FIXED CORE)
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -95,8 +92,6 @@ client.on("interactionCreate", async (interaction) => {
   const command = client.commands.get(interaction.commandName);
 
   if (!command) {
-    console.log("❌ Command not found:", interaction.commandName);
-
     return interaction.reply({
       content: "❌ Command not found",
       ephemeral: true
@@ -104,19 +99,29 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   try {
+    // =====================
+    // FIX: PREVENT TIMEOUTS
+    // =====================
+    if (!interaction.deferred && !interaction.replied) {
+      await interaction.deferReply();
+    }
+
     await command.execute(interaction, { client, db });
+
   } catch (err) {
-    console.error(`❌ Error in ${interaction.commandName}:`, err);
+    console.error(`🔥 COMMAND ERROR (${interaction.commandName}):`, err);
 
-    const msg = {
-      content: "❌ Something went wrong.",
-      ephemeral: true
-    };
-
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp(msg);
-    } else {
-      await interaction.reply(msg);
+    try {
+      if (interaction.deferred) {
+        await interaction.editReply("❌ Command failed. Check bot logs.");
+      } else {
+        await interaction.reply({
+          content: "❌ Command failed.",
+          ephemeral: true
+        });
+      }
+    } catch (e) {
+      console.error("❌ Failed to send error reply:", e);
     }
   }
 });
@@ -132,17 +137,18 @@ client.on("messageCreate", (msg) => {
 // GLOBAL ERROR HANDLING
 // =====================
 process.on("unhandledRejection", (err) => {
-  console.error("❌ Unhandled rejection:", err);
+  console.error("🔥 UNHANDLED REJECTION:", err);
 });
 
 process.on("uncaughtException", (err) => {
-  console.error("❌ Uncaught exception:", err);
+  console.error("🔥 UNCAUGHT EXCEPTION:", err);
 });
 
 // =====================
 // LOGIN
 // =====================
-client.login(process.env.DISCORD_TOKEN).catch((err) => {
-  console.error("❌ Login failed:", err);
-  process.exit(1);
-});
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log("🟢 Bot logged in"))
+  .catch(err => {
+    console.error("❌ Login failed:", err);
+  });
