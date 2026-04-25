@@ -1,31 +1,99 @@
-import db from "../core/database.js";
-import { deliverReward } from "./rewardSystem.js";
+import { db } from "../index.js";
+import { logError } from "../utils/logger.js";
 
-export const shopItems = {
-  diamond: { price: 100, command: "give {player} diamond 1" },
-  netherite: { price: 500, command: "give {player} netherite_ingot 1" },
-  elytra: { price: 2000, command: "give {player} elytra 1" }
-};
+// =====================
+// BUY SYSTEM
+// =====================
+export async function buyItem(userId, item, amount = 1) {
+  try {
+    const res = await db.query(
+      `SELECT * FROM user_stats WHERE discord_id=$1`,
+      [userId]
+    );
 
-export async function buyItem(discordId, mcName, item) {
-  const shop = shopItems[item];
-  if (!shop) return "❌ Item not found";
+    const user = res.rows[0];
 
-  const user = await db.query(
-    "SELECT coins FROM users WHERE discord_id=$1",
-    [discordId]
-  );
+    if (!user) {
+      return "❌ No stats found";
+    }
 
-  const coins = user.rows[0]?.coins || 0;
+    const costMap = {
+      spin: 20,
+      spin5: 80,
+      luck1: 100,
+      luck5: 400
+    };
 
-  if (coins < shop.price) return "❌ Not enough coins";
+    const totalCost = costMap[item] * amount;
 
-  await db.query(
-    "UPDATE users SET coins = coins - $1 WHERE discord_id=$2",
-    [shop.price, discordId]
-  );
+    if (!totalCost) {
+      return "❌ Invalid item";
+    }
 
-  await deliverReward(discordId, mcName, shop.command);
+    if (user.messages < totalCost) {
+      return `❌ Not enough messages. Need ${totalCost}`;
+    }
 
-  return `✅ Bought ${item}`;
+    // =====================
+    // APPLY PURCHASE
+    // =====================
+    let updateQuery = "";
+
+    switch (item) {
+      case "spin":
+        updateQuery = `spins = spins + ${amount}`;
+        break;
+
+      case "spin5":
+        updateQuery = `spins = spins + ${5 * amount}`;
+        break;
+
+      case "luck1":
+        updateQuery = `luck = luck + ${amount}`;
+        break;
+
+      case "luck5":
+        updateQuery = `luck = luck + ${5 * amount}`;
+        break;
+
+      default:
+        return "❌ Unknown item";
+    }
+
+    await db.query(
+      `UPDATE user_stats
+       SET messages = messages - $1,
+           ${updateQuery}
+       WHERE discord_id = $2`,
+      [totalCost, userId]
+    );
+
+    return `✅ Purchased ${item} x${amount}`;
+
+  } catch (err) {
+    logError("buyItem()", err);
+    return "❌ Shop error";
+  }
+}
+
+// =====================
+// STATS SYSTEM
+// =====================
+export async function getStats(userId) {
+  try {
+    const res = await db.query(
+      `SELECT * FROM user_stats WHERE discord_id=$1`,
+      [userId]
+    );
+
+    const u = res.rows[0];
+
+    if (!u) return null;
+
+    return u;
+
+  } catch (err) {
+    logError("getStats()", err);
+    return null;
+  }
 }
