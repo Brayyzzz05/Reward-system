@@ -1,34 +1,23 @@
 import config from "../config.js";
-import { logError } from "../utils/logger.js";
 
-// =====================
-// WEIGHTED ROLL
-// =====================
 export async function rollReward(userId, mcName) {
-  try {
-    const pool = config.reward.pool;
+  const pool = config.reward.pool;
 
-    const totalWeight = pool.reduce((sum, r) => sum + r.chance, 0);
+  const total = pool.reduce((a, b) => a + b.chance, 0);
 
-    let roll = Math.random() * totalWeight;
+  let roll = Math.random() * total;
 
-    for (const reward of pool) {
-      roll -= reward.chance;
+  for (const r of pool) {
+    roll -= r.chance;
 
-      if (roll <= 0) {
-        return {
-          cmd: reward.cmd.replaceAll("{player}", mcName)
-        };
-      }
+    if (roll <= 0) {
+      return {
+        cmd: r.cmd.replaceAll("{player}", mcName)
+      };
     }
-
-    // fallback (should never hit)
-    return {
-      cmd: pool[0].cmd.replaceAll("{player}", mcName)
-    };
-
-  } catch (err) {
-    logError("rollReward()", err);
-    throw err;
   }
+
+  return {
+    cmd: pool[0].cmd.replaceAll("{player}", mcName)
+  };
 }
