@@ -4,19 +4,17 @@ import fs from "fs";
 import path from "path";
 import pkg from "pg";
 
-import commandHandler from "./handlers/commandHandler.js";
-
 dotenv.config();
 
 const { Pool } = pkg;
 
 // =====================
-// STARTUP LOG
+// START LOG
 // =====================
 console.log("🚀 Starting bot...");
 
 // =====================
-// ENV SAFETY CHECKS
+// ENV CHECKS
 // =====================
 if (!process.env.DISCORD_TOKEN) {
   console.error("❌ DISCORD_TOKEN is missing!");
@@ -24,11 +22,11 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 if (!process.env.DATABASE_URL) {
-  console.warn("⚠️ DATABASE_URL is missing! Database features may fail.");
+  console.warn("⚠️ DATABASE_URL is missing (DB disabled)");
 }
 
 // =====================
-// DATABASE (SAFE INIT)
+// DATABASE
 // =====================
 export const db = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -37,32 +35,26 @@ export const db = new Pool({
     : undefined
 });
 
-// Catch DB errors so they don’t crash bot silently
 db.on("error", (err) => {
-  console.error("❌ Unexpected database error:", err);
+  console.error("❌ Database error:", err);
 });
 
 // =====================
 // DISCORD CLIENT
 // =====================
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds
-    // Add more later if needed:
-    // GatewayIntentBits.GuildMessages,
-    // GatewayIntentBits.MessageContent
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
 
 client.commands = new Collection();
 
 // =====================
-// LOAD COMMANDS (SAFE VERSION)
+// LOAD COMMANDS
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
 if (!fs.existsSync(commandsPath)) {
-  console.warn("⚠️ Commands folder not found!");
+  console.warn("⚠️ No commands folder found!");
 } else {
   const commandFiles = fs
     .readdirSync(commandsPath)
@@ -75,27 +67,25 @@ if (!fs.existsSync(commandsPath)) {
 
       if (command.default?.data?.name) {
         client.commands.set(command.default.data.name, command.default);
-        console.log(`✅ Loaded command: ${command.default.data.name}`);
+        console.log(`✅ Loaded: ${command.default.data.name}`);
       } else {
-        console.warn(`⚠️ Invalid command file skipped: ${file}`);
+        console.warn(`⚠️ Skipped invalid command: ${file}`);
       }
     } catch (err) {
-      console.error(`❌ Failed to load command ${file}:`, err);
+      console.error(`❌ Failed loading ${file}:`, err);
     }
   }
 }
 
 // =====================
-// EVENTS
+// READY EVENT
 // =====================
-
-// FIXED: proper Discord.js event name
 client.once("clientReady", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
 // =====================
-// INTERACTION HANDLER
+// SLASH COMMAND HANDLER
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -112,7 +102,7 @@ client.on("interactionCreate", async (interaction) => {
   try {
     await command.execute(interaction, { client, db });
   } catch (err) {
-    console.error(`❌ Error in command ${interaction.commandName}:`, err);
+    console.error(`❌ Command error (${interaction.commandName}):`, err);
 
     const reply = {
       content: "❌ Something went wrong.",
@@ -128,23 +118,17 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // =====================
-// MESSAGE CREATE (SAFE)
+// MESSAGE EVENT (OPTIONAL)
 // =====================
 client.on("messageCreate", (msg) => {
-  try {
-    if (msg.author.bot) return;
-
-    // future reward system hook
-  } catch (err) {
-    console.error("❌ messageCreate error:", err);
-  }
+  if (msg.author.bot) return;
 });
 
 // =====================
 // GLOBAL ERROR HANDLING
 // =====================
 process.on("unhandledRejection", (err) => {
-  console.error("❌ Unhandled promise rejection:", err);
+  console.error("❌ Unhandled rejection:", err);
 });
 
 process.on("uncaughtException", (err) => {
@@ -152,9 +136,9 @@ process.on("uncaughtException", (err) => {
 });
 
 // =====================
-// START BOT (SAFE LOGIN)
+// LOGIN BOT
 // =====================
 client.login(process.env.DISCORD_TOKEN).catch((err) => {
-  console.error("❌ Failed to login bot:", err);
+  console.error("❌ Login failed:", err);
   process.exit(1);
 });
