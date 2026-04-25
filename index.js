@@ -30,14 +30,18 @@ export const db = new Pool({
 });
 
 db.on("error", (err) => {
-  logError("DATABASE CONNECTION", err);
+  logError("DATABASE ERROR", err);
 });
 
 // =====================
 // CLIENT
 // =====================
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 client.commands = new Collection();
@@ -68,7 +72,7 @@ if (fs.existsSync(commandsPath)) {
       logInfo(`Loaded command: ${command.data.name}`);
 
     } catch (err) {
-      logError(`LOADING COMMAND: ${file}`, err);
+      logError(`COMMAND LOAD: ${file}`, err);
     }
   }
 }
@@ -83,7 +87,7 @@ client.once("clientReady", () => {
 });
 
 // =====================
-// INTERACTION HANDLER (FIXED + SAFE)
+// INTERACTION HANDLER
 // =====================
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -98,7 +102,9 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   try {
-    // Prevent timeout crash
+    // =====================
+    // SAFE DEFER (PREVENT TIMEOUT)
+    // =====================
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
@@ -118,20 +124,33 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
     } catch (e) {
-      logError("FAILED ERROR RESPONSE", e);
+      logError("ERROR RESPONSE FAILED", e);
     }
   }
 });
 
 // =====================
-// MESSAGE EVENT (OPTIONAL)
+// MESSAGE TRACKING (ECONOMY SYSTEM)
 // =====================
-client.on("messageCreate", (msg) => {
+client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
+
+  try {
+    await db.query(
+      `INSERT INTO user_stats (discord_id, messages)
+       VALUES ($1, 1)
+       ON CONFLICT (discord_id)
+       DO UPDATE SET messages = user_stats.messages + 1`,
+      [msg.author.id]
+    );
+
+  } catch (err) {
+    logError("MESSAGE TRACKING", err);
+  }
 });
 
 // =====================
-// GLOBAL ERROR HANDLING (RAILWAY SAFE)
+// GLOBAL ERROR HANDLING
 // =====================
 process.on("unhandledRejection", (err) => {
   logError("UNHANDLED REJECTION", err);
