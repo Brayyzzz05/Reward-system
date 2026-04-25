@@ -3,11 +3,11 @@ import { SlashCommandBuilder } from "discord.js";
 export default {
   data: new SlashCommandBuilder()
     .setName("verify")
-    .setDescription("Link your Minecraft account to Discord")
+    .setDescription("Link your Minecraft account")
     .addStringOption(option =>
       option
         .setName("username")
-        .setDescription("Your Minecraft username")
+        .setDescription("Minecraft username")
         .setRequired(true)
     ),
 
@@ -15,19 +15,6 @@ export default {
     const mcName = interaction.options.getString("username");
 
     try {
-      // =====================
-      // VALIDATION
-      // =====================
-      if (!mcName || mcName.length < 3) {
-        return interaction.reply({
-          content: "❌ Invalid Minecraft username.",
-          ephemeral: true
-        });
-      }
-
-      // =====================
-      // CHECK IF ALREADY LINKED
-      // =====================
       const existing = await db.query(
         "SELECT * FROM verifications WHERE discord_id = $1",
         [interaction.user.id]
@@ -35,21 +22,18 @@ export default {
 
       if (existing.rows.length > 0) {
         return interaction.reply({
-          content: `❌ You are already linked to **${existing.rows[0].minecraft_username}**`,
+          content: `❌ Already linked to ${existing.rows[0].minecraft_username}`,
           ephemeral: true
         });
       }
 
-      // =====================
-      // INSERT LINK
-      // =====================
       await db.query(
         "INSERT INTO verifications (discord_id, minecraft_username) VALUES ($1, $2)",
         [interaction.user.id, mcName]
       );
 
       return interaction.reply({
-        content: `✅ Successfully linked to **${mcName}**`,
+        content: `✅ Linked to ${mcName}`,
         ephemeral: true
       });
 
@@ -57,4 +41,9 @@ export default {
       console.error("VERIFY ERROR:", err);
 
       return interaction.reply({
-        content: "❌ Failed
+        content: "❌ Failed to link account",
+        ephemeral: true
+      });
+    }
+  }
+};
