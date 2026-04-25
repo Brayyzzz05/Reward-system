@@ -3,7 +3,6 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import pkg from "pg";
-import { logError, logInfo } from "./utils/logger.js";
 
 dotenv.config();
 
@@ -12,7 +11,7 @@ const { Pool } = pkg;
 console.log("🚀 Starting bot...");
 
 // =====================
-// ENV CHECK
+// ENV SAFETY CHECK
 // =====================
 if (!process.env.DISCORD_TOKEN) {
   console.error("❌ Missing DISCORD_TOKEN");
@@ -20,17 +19,16 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 // =====================
-// DATABASE
+// DATABASE (SAFE INIT)
 // =====================
 export const db = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL
-    ? { rejectUnauthorized: false }
-    : undefined
+  connectionString: process.env.DATABASE_URL || "",
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
+// Prevent DB crash killing bot
 db.on("error", (err) => {
-  logError("DATABASE ERROR", err);
+  console.error("🔥 DATABASE ERROR:", err);
 });
 
 // =====================
@@ -47,42 +45,46 @@ const client = new Client({
 client.commands = new Collection();
 
 // =====================
-// LOAD COMMANDS
+// SAFE COMMAND LOADER
 // =====================
 const commandsPath = path.join(process.cwd(), "commands");
 
-if (fs.existsSync(commandsPath)) {
-  const commandFiles = fs
-    .readdirSync(commandsPath)
-    .filter(file => file.endsWith(".js"));
+async function loadCommands() {
+  if (!fs.existsSync(commandsPath)) {
+    console.log("⚠️ No commands folder found");
+    return;
+  }
 
-  for (const file of commandFiles) {
+  const files = fs.readdirSync(commandsPath).filter(f => f.endsWith(".js"));
+
+  for (const file of files) {
     try {
       const filePath = path.resolve(commandsPath, file);
-      const commandModule = await import(`file://${filePath}`);
+      const mod = await import(`file://${filePath}`);
 
-      const command = commandModule.default;
+      const cmd = mod.default;
 
-      if (!command?.data?.name || !command?.execute) {
-        logInfo(`Skipped invalid command: ${file}`);
+      if (!cmd?.data?.name || !cmd?.execute) {
+        console.log(`⚠️ Skipped invalid command: ${file}`);
         continue;
       }
 
-      client.commands.set(command.data.name, command);
-      logInfo(`Loaded command: ${command.data.name}`);
+      client.commands.set(cmd.data.name, cmd);
+      console.log(`✅ Loaded command: ${cmd.data.name}`);
 
     } catch (err) {
-      logError(`COMMAND LOAD: ${file}`, err);
+      console.log(`❌ Failed command: ${file}`);
+      console.error(err);
     }
   }
+
+  console.log("📦 Commands loaded:", [...client.commands.keys()]);
 }
 
-console.log("📦 Commands loaded:", [...client.commands.keys()]);
-
 // =====================
-// READY EVENT
+// READY EVENT (FIXED)
 // =====================
-client.once("clientReady", () => {
+client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
 });
 
@@ -102,9 +104,7 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   try {
-    // =====================
-    // SAFE DEFER (PREVENT TIMEOUT)
-    // =====================
+    // ALWAYS defer safely
     if (!interaction.deferred && !interaction.replied) {
       await interaction.deferReply();
     }
@@ -112,25 +112,25 @@ client.on("interactionCreate", async (interaction) => {
     await command.execute(interaction, { client, db });
 
   } catch (err) {
-    logError(`COMMAND: ${interaction.commandName}`, err);
+    console.error(`❌ COMMAND ERROR (${interaction.commandName})`, err);
 
     try {
       if (interaction.deferred) {
-        await interaction.editReply("❌ Command failed (check logs)");
+        await interaction.editReply("❌ Command failed. Check logs.");
       } else {
         await interaction.reply({
-          content: "❌ Command failed",
+          content: "❌ Command failed.",
           ephemeral: true
         });
       }
     } catch (e) {
-      logError("ERROR RESPONSE FAILED", e);
+      console.error("❌ Failed to send error reply:", e);
     }
   }
 });
 
 // =====================
-// MESSAGE TRACKING (ECONOMY SYSTEM)
+// MESSAGE TRACKING (SAFE)
 // =====================
 client.on("messageCreate", async (msg) => {
   if (msg.author.bot) return;
@@ -143,29 +143,35 @@ client.on("messageCreate", async (msg) => {
        DO UPDATE SET messages = user_stats.messages + 1`,
       [msg.author.id]
     );
-
   } catch (err) {
-    logError("MESSAGE TRACKING", err);
+    console.error("⚠️ Message tracking error:", err);
   }
 });
 
 // =====================
-// GLOBAL ERROR HANDLING
+// GLOBAL ERROR SAFETY
 // =====================
 process.on("unhandledRejection", (err) => {
-  logError("UNHANDLED REJECTION", err);
+  console.error("🔥 UNHANDLED REJECTION:", err);
 });
 
 process.on("uncaughtException", (err) => {
-  logError("UNCAUGHT EXCEPTION", err);
+  console.error("💥 UNCAUGHT EXCEPTION:", err);
 });
 
 // =====================
-// LOGIN
+// START BOT SAFELY
 // =====================
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => console.log("🟢 Bot logged in"))
-  .catch((err) => {
-    logError("LOGIN FAILED", err);
+(async () => {
+  try {
+    await loadCommands();
+
+    await client.login(process.env.DISCORD_TOKEN);
+
+    console.log("🟢 Bot fully online");
+
+  } catch (err) {
+    console.error("❌ FAILED TO START BOT:", err);
     process.exit(1);
-  });
+  }
+})();
